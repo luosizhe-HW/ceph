@@ -18,6 +18,7 @@ class GLZCompressor : public Compressor {
  CephContext *const cct;
  public:
   GLZCompressor(CephContext* cct) : Compressor(COMP_ALG_GLZ, "glz"), cct(cct) {}
+  ~GLZCompressor() {}
 
   int compress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> &compressor_message) override {
     if (!src.is_contiguous()) {
@@ -30,7 +31,7 @@ class GLZCompressor : public Compressor {
     auto p = src.begin();
     size_t left = src.length();
     int pos = 0;
-    const char *data;
+    const char *data = nullptr;
     unsigned num = src.get_num_buffers();
     encode((uint32_t)num, dst);
     glz_encoder* glz_stream = nullptr;

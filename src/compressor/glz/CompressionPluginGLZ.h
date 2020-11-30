@@ -13,6 +13,7 @@ public:
 
   explicit CompressionPluginGLZ(CephContext* cct) : CompressionPlugin(cct)
   {}
+  ~CompressionPluginGLZ() {}
 
   int factory(CompressorRef *cs, std::ostream *ss) override {
     if (compressor == 0) {
