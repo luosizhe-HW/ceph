@@ -195,9 +195,9 @@ namespace ECTransaction {
 	  ldpp_dout(dpp, 20) << __func__ << ": partial_write=" << partial_write << "write_set=" << write_set		<< " to_read=" << to_read << dendl;
 	  
 	  if(partial_write && HiRebuildToread(write_set, chunk_size, to_read)) {
-	    lapp_dout(dpp, 20) << __func__ << ": to_read=" << to_read << dendl;
+	    ldpp_dout(dpp, 20) << __func__ << ": to_read=" << to_read << dendl;
 	    plan.to_read[i.first].clear();
-	    plan.ro_read[i.first].insert(extent_set(to_read));
+	    plan.to_read[i.first].insert(extent_set(to_read));
 	  }
 	}
 
@@ -230,10 +230,10 @@ namespace ECTransaction {
     vector<pg_log_entry_t> &entries,
     map<hobject_t,extent_map> *written,
     map<shard_id_t, ObjectStore::Transaction> *transactions,
-    set<shard_id_t> &read_sid;
+    set<shard_id_t> &read_sid,
     set<hobject_t> *temp_added,
     set<hobject_t> *temp_removed,
-    DoutPrefixProvider *dpp;
+    DoutPrefixProvider *dpp,
     bool &have_append);
 };
 

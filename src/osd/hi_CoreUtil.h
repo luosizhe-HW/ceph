@@ -33,11 +33,11 @@ struct HiECInfo {
 void HiGetRelatedShards(const pair<uint64_t,uint64_t> &rRange,
 			const HiECInfo &ecInfo, set<int> &out);
 
-void HiGetShardsRangeeToRead(const pair<uint64_t,uint64_t> &rRange,
+void HiGetShardsRangeToRead(const pair<uint64_t,uint64_t> &rRange,
 			const HiECInfo &ecInfo,
 			map<int , set<pair<uint64_t, uint64_t>>> &wants);
 
-void HiGetWriteToshards(const map<uint64_t,uint64_t> &toWriteChunkAlign,
+void HiGetWriteToShards(const map<uint64_t,uint64_t> &toWriteChunkAlign,
 			const HiECInfo &ecInfo ,set<int> &wantToWrite);
 
 void HiGetReconstructShards(const unsigned int start,const unsigned int count,
@@ -46,7 +46,7 @@ void HiGetReconstructShards(const unsigned int start,const unsigned int count,
 
 void HiReconstructPrepare(
 		const HiECInfo &ecInfo, const pair<uint64_t,uint64_t> &rRange,
-		vector<boot::tuple<unsigned int , unsigned int , unsigned int>> &cInfo);
+		vector<boost::tuple<unsigned int , unsigned int , unsigned int>> &cInfo);
 
 #endif
 

@@ -1193,7 +1193,7 @@ void ECBackend::handle_sub_read_reply(
       ceph_assert(req_iter != rop.to_read.find(i->first)->second.to_read.end());
       ceph_assert(riter != rop.complete[i->first].returned.end());
       if(!partial_read) {
-	pair<uint64_t, uint64_t> adjusted = sinfo.aligned_offest_len_to_chunk(
+	pair<uint64_t, uint64_t> adjusted = sinfo.aligned_offset_len_to_chunk(
 	  make_pair(req_iter->get<0>(), req_iter->get<1>()));
 	ceph_assert(adjusted.first == j->first);
 	riter->get<2>()[from].claim(j->second);
@@ -1774,10 +1774,10 @@ void ECBackend::do_read_op(ReadOp &op)
 	      if (i->second.partial_read) {
 		  if (wants.find(k->first.shard) != wants.end()) {
 			  send_shards.insert(k->first.shard);
-			  messages[k->first].push_back(
+			  messages[k->first].to_read[i->first].push_back(
 			    boost::make_tuple(
 			      wants[k->first.shard].first,
-			      wants[k->firsr.shard].second,
+			      wants[k->first.shard].second,
 			      j->get<2>()));
 		  }
 		 continue;
@@ -1788,7 +1788,7 @@ void ECBackend::do_read_op(ReadOp &op)
 	    chunk_off_len.second,
 	    j->get<2>()));
       }
-        ceph_assert(!need_attrs);
+       // ceph_assert(!need_attrs);
   }
 
   bool need_attrs = i->second.want_attrs;
@@ -1797,7 +1797,7 @@ void ECBackend::do_read_op(ReadOp &op)
        j != i->second.need.end();
        ++j) {
     if (need_attrs) {
-      message[j->first].attrs_to_read.insert(i->first);
+      messages[j->first].attrs_to_read.insert(i->first);
       need_attrs = false;
     }
 
@@ -1808,7 +1808,7 @@ void ECBackend::do_read_op(ReadOp &op)
     }
    }
   }
-  dout(20) << __func__ << " message size: " << message.size() <<endl;
+  dout(20) << __func__ << " messages size: " << messages.size() <<dendl;
   for (map<pg_shard_t, ECSubRead>::iterator i = messages.begin();
        i != messages.end();
        ++i) {
@@ -2233,7 +2233,7 @@ bool ECBackend::try_finish_rmw()
   }
   Op *op = &(waiting_commit.front());
   if (op->write_in_progress()) {
-    dout(20) < __func__ << ": op write in progess" << dendl;
+    dout(20) << __func__ << ": op write in progess" << dendl;
     return false;
   }
   waiting_commit.pop_front();
@@ -2486,7 +2486,7 @@ struct CallClientContexts :
     ceph_assert(res.errors.empty());
     ldpp_dout(dpp, 20) << "read_result_t :" << res << dendl;
     for (auto &&read: to_read) {
-	    buffeerlist bl;
+	    bufferlist bl;
       pair<uint64_t, uint64_t> adjusted ;
       if (!partial_read) {
 	      adjusted = ec->sinfo.offset_len_to_stripe_bounds(
@@ -2573,7 +2573,7 @@ void ECBackend::objects_read_and_reconstruct(
       make_pair(
 	to_read.first,
 	read_request_t(
-	  to_read.second.first
+	  to_read.second.first,
 	  shards,
 	  false,
 	  c,

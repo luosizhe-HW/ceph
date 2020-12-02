@@ -176,12 +176,12 @@ public:
     set<int> have;
     map<shard_id_t, pg_shard_t> shards;
     set<pg_shard_t> error_shards;
-    get_all_avail_shards(hold, error_shards, have, shards, false);
+    get_all_avail_shards(hoid, error_shards, have, shards, false);
 
     if (includes(have.begin(), have.end(), want_to_read.begin(), want_to_read.end())){
 	    return true;
     }
-    retutn false;
+    return false;
   }
 
   void get_off_len_shards( uint64_t off, uint64_t len, set<int>& out);
@@ -198,7 +198,7 @@ public:
 
   template <typename Func>
   void objects_read_async_no_cache(
-    const list<boot::tuple<hobject_t, extent_set, bool>> &remote_read_ext,
+    const list<boost::tuple<hobject_t, extent_set, bool>> &remote_read_ext,
     Func &&on_complete) {
     std::map<hobject_t, std::pair<std::list<boost::tuple<uint64_t, uint64_t, uint32_t> >, bool > > _to_read;
     for (auto &&hpair: remote_read_ext) {

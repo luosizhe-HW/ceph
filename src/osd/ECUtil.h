@@ -78,19 +78,19 @@ public:
     return std::make_pair(off, len);
   }
 
-  uint64_t logical_to_prev_chunk(uint64_t offest) const {
-	  return offest - (offest % chunk_size);
+  uint64_t logical_to_prev_chunk(uint64_t offset) const {
+	  return offset - (offset % chunk_size);
   }
-  uint64_t logical_to_next_chunk(uint64_t offest) const {
-	 return (( offest % chunk_size) ?
-		(offest - (offest % chunk_size) + chunk_size) : offest);
+  uint64_t logical_to_next_chunk(uint64_t offset) const {
+	 return (( offset % chunk_size) ?
+		(offset - (offset % chunk_size) + chunk_size) : offset);
   }
-  std::pair<uint64_t, uint64_t> offest_len_to_chunk_bounds(
+  std::pair<uint64_t, uint64_t> offset_len_to_chunk_bounds(
     std::pair<uint64_t, uint64_t> in) const {
 	 uint64_t off = logical_to_prev_chunk(in.first);
 	 uint64_t len = logical_to_next_chunk(
 		(in.first - off) + in.second);
-	return std::makr_pair(off, len);
+	return std::make_pair(off, len);
   }
 };
 
