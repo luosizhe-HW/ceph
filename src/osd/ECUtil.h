@@ -65,7 +65,7 @@ public:
     return (offset / chunk_size) * stripe_width;
   }
   std::pair<uint64_t, uint64_t> aligned_offset_len_to_chunk(
-    std::pair<uint64_t, uint64_t> in) const {
+  std::pair<uint64_t, uint64_t> in) const {
     return std::make_pair(
       aligned_logical_offset_to_chunk_offset(in.first),
       aligned_logical_offset_to_chunk_offset(in.second));
@@ -76,6 +76,21 @@ public:
     uint64_t len = logical_to_next_stripe_offset(
       (in.first - off) + in.second);
     return std::make_pair(off, len);
+  }
+
+  uint64_t logical_to_prev_chunk(uint64_t offest) const {
+	  return offest - (offest % chunk_size);
+  }
+  uint64_t logical_to_next_chunk(uint64_t offest) const {
+	 return (( offest % chunk_size) ?
+		(offest - (offest % chunk_size) + chunk_size) : offest);
+  }
+  std::pair<uint64_t, uint64_t> offest_len_to_chunk_bounds(
+    std::pair<uint64_t, uint64_t> in) const {
+	 uint64_t off = logical_to_prev_chunk(in.first);
+	 uint64_t len = logical_to_next_chunk(
+		(in.first - off) + in.second);
+	return std::makr_pair(off, len);
   }
 };
 
