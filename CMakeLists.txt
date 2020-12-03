@@ -251,7 +251,7 @@ if(WITH_GSSAPI)
   set(HAVE_GSSAPI ${GSSApi_FOUND})
 endif()
 
-option(WITH_FUSE "Fuse is here" ON)
+option(WITH_FUSE "Fuse is here" OFF)
 if(WITH_FUSE)
   find_package(FUSE)
   set(HAVE_LIBFUSE ${FUSE_FOUND})
