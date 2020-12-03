@@ -48,7 +48,7 @@ target_link_libraries(osd
   PUBLIC dmclock::dmclock
   PRIVATE
   ${LEVELDB_LIBRARIES}
-  heap_profiler cpu_profiler ${CMAKE_DL_LIBS})
+  heap_profiler cpu_profiler ${CMAKE_DL_LIBS} hw_ec_partial)
 if(WITH_LTTNG)
   add_dependencies(osd osd-tp pg-tp)
 endif()

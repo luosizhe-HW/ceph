@@ -8,7 +8,7 @@
 #include <boost/tuple/tuple.hpp>
 using namespace std;
 
-bool HiSetWriteSection( const uint64_t offest, const uint64_t len, const uint64_t csize,
+bool HiSetWriteSection( const uint64_t offset, const uint64_t len, const uint64_t csize,
 		uint64_t &headStart, uint64_t &headLength);
 
 bool HiRebuildToread( const map<uint64_t, uint64_t> &writeSet, uint64_t csize,

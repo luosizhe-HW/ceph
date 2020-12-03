@@ -110,7 +110,7 @@ void ECTransaction::generate_transactions(
   vector<pg_log_entry_t> &entries,
   map<hobject_t,extent_map> *written_map,
   map<shard_id_t, ObjectStore::Transaction> *transactions,
-  set<shard_id_t> & write_sid,
+  set<shard_id_t> &write_sid,
   set<hobject_t> *temp_added,
   set<hobject_t> *temp_removed,
   DoutPrefixProvider *dpp,

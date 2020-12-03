@@ -2491,8 +2491,8 @@ struct CallClientContexts :
       if (!partial_read) {
 	      adjusted = ec->sinfo.offset_len_to_stripe_bounds(
 	  make_pair(read.get<0>(), read.get<1>()));
-      }else {
-	      adjusted = ec->sinfo.offset_len_to_stripe_bounds(
+      } else {
+	      adjusted = ec->sinfo.offset_len_to_chunk_bounds(
 			      make_pair(read.get<0>(),read.get<1>()));
       }
       ceph_assert(res.returned.front().get<0>() == adjusted.first &&

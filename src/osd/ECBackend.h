@@ -200,7 +200,7 @@ public:
   void objects_read_async_no_cache(
     const list<boost::tuple<hobject_t, extent_set, bool>> &remote_read_ext,
     Func &&on_complete) {
-    std::map<hobject_t, std::pair<std::list<boost::tuple<uint64_t, uint64_t, uint32_t> >, bool > > _to_read;
+    std::map<hobject_t, std::pair<std::list<boost::tuple<uint64_t, uint64_t, uint32_t> >, bool >  > _to_read;
     for (auto &&hpair: remote_read_ext) {
       auto &l = _to_read[hpair.get<0>()];
       l.second = hpair.get<2>();
