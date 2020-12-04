@@ -69,7 +69,7 @@ TEST(ectransaction, two_writes_nearby)
   t->write(h, 569856, b.length(), b, 0);
 
   auto plan = ECTransaction::get_write_plan(
-    dpp.get_cct()->_conf->osd_ec_partial_write,
+    dpp.get_cct()->_conf->osd_ec_partial_write && dpp.get_cct()->_conf->osd_ec_partial_read,
     sinfo,
     std::move(t),
     [&](const hobject_t &i) {
@@ -111,7 +111,7 @@ TEST(ectransaction, many_writes)
   t->write(h, 2813952, b.length(), b, 0);
 
   auto plan = ECTransaction::get_write_plan(
-    dpp.get_cct()->_conf->osd_ec_partial_write,
+    dpp.get_cct()->_conf->osd_ec_partial_write && dpp.get_cct()->_conf->osd_ec_partial_read,
     sinfo,
     std::move(t),
     [&](const hobject_t &i) {

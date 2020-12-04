@@ -129,13 +129,11 @@ void ECTransaction::generate_transactions(
   for (auto &&i: entries) {
     obj_to_log.insert(make_pair(i.soid, &i));
   }
-//safe_create_traverse shuru zhiyou map<hobject_t,ObjectOperation>PGTransaction::op_map,
-//mou suanfa paixu bianli op_map dedao opair
   t.safe_create_traverse(
     [&](pair<const hobject_t, PGTransaction::ObjectOperation> &opair) {
-      const hobject_t &oid = opair.first; //oid is hobject_t type
-      auto &op = opair.second;		  // op is ObjectOperation type
-      auto &obc_map = t.obc_map;	  // map<hobject_t,ObjectContextRef> obc_map; // object context
+      const hobject_t &oid = opair.first; 
+      auto &op = opair.second;		  
+      auto &obc_map = t.obc_map;	  
       auto &written = (*written_map)[oid];
 
       auto iter = obj_to_log.find(oid);
@@ -395,18 +393,16 @@ void ECTransaction::generate_transactions(
       }
 
       extent_map to_write;
-      // const map<hobject_t,extent_map> & partial_extents, pextiter is map iterator
       auto pextiter = partial_extents.find(oid);
       if (pextiter != partial_extents.end()) {
-	//read the original data: using extent_map = interval_map <uint64_t,bufferlist,bl_split_merge>
 	to_write = pextiter->second;
       }
 
       vector<pair<uint64_t, uint64_t> > rollback_extents;
-      const uint64_t orig_size = hinfo->get_total_logical_size(sinfo);//object beginning write, orig_size=0
+      const uint64_t orig_size = hinfo->get_total_logical_size(sinfo);
 
       uint64_t new_size = orig_size;
-      uint64_t append_after = new_size;//0k,8k,16k,24k
+      uint64_t append_after = new_size;
       ldpp_dout(dpp, 20) << __func__ << ": new_size start " << new_size << dendl;
       if (op.truncate && op.truncate->first < new_size) {
 	ceph_assert(!op.is_fresh_object());
@@ -414,7 +410,7 @@ void ECTransaction::generate_transactions(
 	  op.truncate->first);
 	ldpp_dout(dpp, 20) << __func__ << ": new_size truncate down "
 			   << new_size << dendl;
-	if (new_size != op.truncate->first) { // 0 the unaligned part
+	if (new_size != op.truncate->first) {
 	  bufferlist bl;
 	  bl.append_zero(new_size - op.truncate->first);
 	  to_write.insert(
@@ -473,23 +469,22 @@ void ECTransaction::generate_transactions(
 
       uint32_t fadvise_flags = 0;
       for (auto &&extent: op.buffer_updates) {
-	//op is PGTransaction::ObjectOperation type (buffer_updates is interval_map<uint64-t,BufferUpdateType,SplitMerger>)
 	using BufferUpdate = PGTransaction::ObjectOperation::BufferUpdate;
 	bufferlist bl;
 	match(
-	  extent.get_val(),//extent->second.second;
+	  extent.get_val(),
 	  [&](const BufferUpdate::Write &op) {
 	    bl = op.buffer;
 	    fadvise_flags |= op.fadvise_flags;
 	  },
 	  [&](const BufferUpdate::Zero &) {
-	    bl.append_zero(extent.get_len());  //appends 0 to the specified length after b1
+	    bl.append_zero(extent.get_len()); 
 	  },
 	  [&](const BufferUpdate::CloneRange &) {
 	    ceph_assert(
 	      0 ==
 	      "CloneRange is not allowed, do_op should have returned ENOTSUPP");
-	  });    // inline_varint.h:204   what this function does? update b1?
+	  });   
 
 	uint64_t off = extent.get_off();
 	uint64_t len = extent.get_len();
