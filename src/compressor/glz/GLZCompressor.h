@@ -55,10 +55,13 @@ class GLZCompressor : public Compressor {
       encode(origin_len, dst);
       encode((uint32_t)compressed_len, dst);
   }
-  ceph_assert(p.end());
+  glz_compress_delete(&glz_stream);
+  if (!p.end()) {
+    return -1;
+  }
   compressor_message = cct->_conf->compressor_glz_level;
   dst.append(outptr, 0, pos);
-  glz_compress_delete(&glz_stream);
+
  return 0;
 } 
 
