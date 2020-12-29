@@ -3327,6 +3327,16 @@ std::vector<Option> get_global_options() {
     .set_default(false)
     .set_description(""),
 
+    Option("osd_ec_partial_read", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description("Try to read necessary chunks instead of all chunks in a stripe in ECBackend."
+		    "This option helps to reduce IO and network operation and improve read performance"),
+
+    Option("osd_ec_partial_write", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description("Try to read and write partial chunks instead of a complete stripe in erasure code data pool."
+		    "This option helps to reduce IO and network operation and improve write performance"),
+
     Option("osd_recover_clone_overlap_limit", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10)
     .set_description(""),

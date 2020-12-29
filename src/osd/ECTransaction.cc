@@ -34,6 +34,8 @@ void encode_and_write(
   ECUtil::HashInfoRef hinfo,
   extent_map &written,
   map<shard_id_t, ObjectStore::Transaction> *transactions,
+  bool overwrite,
+  set<shard_id_t> &write_sid,
   DoutPrefixProvider *dpp) {
   const uint64_t before_size = hinfo->get_total_logical_size(sinfo);
   ceph_assert(sinfo.logical_offset_is_stripe_aligned(offset));
@@ -61,6 +63,11 @@ void encode_and_write(
 
   for (auto &&i : *transactions) {
     ceph_assert(buffers.count(i.first));
+
+    if(overwrite && (write_sid.find(i.first) == write_sid.end())){
+      ldpp_dout(dpp, 20) << __func__ << ": transactions is continue write_sid=" << write_sid << "i.first=" << i.first << dendl;
+      continue;
+    }
     bufferlist &enc_bl = buffers[i.first];
     if (offset >= before_size) {
       i.second.set_alloc_hint(
@@ -103,9 +110,11 @@ void ECTransaction::generate_transactions(
   vector<pg_log_entry_t> &entries,
   map<hobject_t,extent_map> *written_map,
   map<shard_id_t, ObjectStore::Transaction> *transactions,
+  set<shard_id_t> &write_sid,
   set<hobject_t> *temp_added,
   set<hobject_t> *temp_removed,
-  DoutPrefixProvider *dpp)
+  DoutPrefixProvider *dpp,
+  bool &have_append)
 {
   ceph_assert(written_map);
   ceph_assert(transactions);
@@ -120,12 +129,11 @@ void ECTransaction::generate_transactions(
   for (auto &&i: entries) {
     obj_to_log.insert(make_pair(i.soid, &i));
   }
-
   t.safe_create_traverse(
     [&](pair<const hobject_t, PGTransaction::ObjectOperation> &opair) {
-      const hobject_t &oid = opair.first;
-      auto &op = opair.second;
-      auto &obc_map = t.obc_map;
+      const hobject_t &oid = opair.first; 
+      auto &op = opair.second;		  
+      auto &obc_map = t.obc_map;	  
       auto &written = (*written_map)[oid];
 
       auto iter = obj_to_log.find(oid);
@@ -402,7 +410,7 @@ void ECTransaction::generate_transactions(
 	  op.truncate->first);
 	ldpp_dout(dpp, 20) << __func__ << ": new_size truncate down "
 			   << new_size << dendl;
-	if (new_size != op.truncate->first) { // 0 the unaligned part
+	if (new_size != op.truncate->first) {
 	  bufferlist bl;
 	  bl.append_zero(new_size - op.truncate->first);
 	  to_write.insert(
@@ -470,13 +478,13 @@ void ECTransaction::generate_transactions(
 	    fadvise_flags |= op.fadvise_flags;
 	  },
 	  [&](const BufferUpdate::Zero &) {
-	    bl.append_zero(extent.get_len());
+	    bl.append_zero(extent.get_len()); 
 	  },
 	  [&](const BufferUpdate::CloneRange &) {
 	    ceph_assert(
 	      0 ==
 	      "CloneRange is not allowed, do_op should have returned ENOTSUPP");
-	  });
+	  });   
 
 	uint64_t off = extent.get_off();
 	uint64_t len = extent.get_len();
@@ -507,13 +515,15 @@ void ECTransaction::generate_transactions(
 	  len += tail;
 	}
 
+	ldpp_dout(dpp, 20) << __func__ << ": to_write=" << to_write<<" off=" <<off<<" len="<<len<<" bl="<<bl<< dendl;
 	to_write.insert(off, len, bl);
+	ldpp_dout(dpp, 20) << __func__ << ": after insert to_write="<< to_write<<" bl="<<bl<< dendl;
+
 	if (end > new_size)
 	  new_size = end;
       }
 
-      if (op.truncate &&
-	  op.truncate->second > new_size) {
+      if (op.truncate && op.truncate->second > new_size) {
 	ceph_assert(op.truncate->second > append_after);
 	uint64_t truncate_to =
 	  sinfo.logical_to_next_stripe_offset(
@@ -581,6 +591,8 @@ void ECTransaction::generate_transactions(
 	  hinfo,
 	  written,
 	  transactions,
+	  true,
+	  write_sid,
 	  dpp);
       }
 
@@ -588,12 +600,12 @@ void ECTransaction::generate_transactions(
 	append_after,
 	std::numeric_limits<uint64_t>::max() - append_after);
       ldpp_dout(dpp, 20) << __func__ << ": to_append: "
-			 << to_append
-			 << dendl;
+		 << to_append
+		 << dendl;
       for (auto &&extent: to_append) {
 	ceph_assert(sinfo.logical_offset_is_stripe_aligned(extent.get_off()));
 	ceph_assert(sinfo.logical_offset_is_stripe_aligned(extent.get_len()));
-	ldpp_dout(dpp, 20) << __func__ << ": appending "
+	ldpp_dout(dpp, 20) << __func__ << ": appending section "
 			   << extent.get_off() << "~" << extent.get_len()
 			   << dendl;
 	encode_and_write(
@@ -608,13 +620,15 @@ void ECTransaction::generate_transactions(
 	  hinfo,
 	  written,
 	  transactions,
+	  false,
+	  write_sid,
 	  dpp);
       }
 
       ldpp_dout(dpp, 20) << __func__ << ": " << oid
-			 << " resetting hinfo to logical size "
-			 << new_size
-			 << dendl;
+		 << " resetting hinfo to logical size "
+		 << new_size
+		 << dendl;
       if (!rollback_extents.empty() && entry) {
 	if (entry) {
 	  ldpp_dout(dpp, 20) << __func__ << ": " << oid
@@ -635,6 +649,7 @@ void ECTransaction::generate_transactions(
 			   << append_after
 			   << dendl;
 	entry->mod_desc.append(append_after);
+	have_append = true;
       }
 
       if (!op.is_delete()) {

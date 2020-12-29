@@ -137,7 +137,7 @@ public:
    * check_recovery_sources.
    */
   void objects_read_and_reconstruct(
-    const map<hobject_t, std::list<boost::tuple<uint64_t, uint64_t, uint32_t> >
+    const std::map<hobject_t, std::pair<std::list<boost::tuple<uint64_t,uint64_t,uint32_t>>, bool>
     > &reads,
     bool fast_read,
     GenContextURef<map<hobject_t,pair<int, extent_map> > &&> &&func);
@@ -167,6 +167,27 @@ public:
       func.release()->complete(std::move(results));
     }
   };
+
+  bool can_partial_read(const hobject_t &hoid)
+  {
+    set<int> want_to_read;
+    get_want_to_read_shards(&want_to_read);
+
+    set<int> have;
+    map<shard_id_t, pg_shard_t> shards;
+    set<pg_shard_t> error_shards;
+    get_all_avail_shards(hoid, error_shards, have, shards, false);
+
+    if (includes(have.begin(), have.end(), want_to_read.begin(), want_to_read.end())){
+	    return true;
+    }
+    return false;
+  }
+
+  void get_off_len_shards( uint64_t off, uint64_t len, set<int>& out);
+
+  bool can_partial_read_log( const hobject_t &hoid);
+
   list<ClientAsyncReadStatus> in_progress_client_reads;
   void objects_read_async(
     const hobject_t &hoid,
@@ -177,21 +198,22 @@ public:
 
   template <typename Func>
   void objects_read_async_no_cache(
-    const map<hobject_t,extent_set> &to_read,
+    const list<boost::tuple<hobject_t, extent_set, bool>> &remote_read_ext,
     Func &&on_complete) {
-    map<hobject_t,std::list<boost::tuple<uint64_t, uint64_t, uint32_t> > > _to_read;
-    for (auto &&hpair: to_read) {
-      auto &l = _to_read[hpair.first];
-      for (auto extent: hpair.second) {
-	l.emplace_back(extent.first, extent.second, 0);
+    std::map<hobject_t, std::pair<std::list<boost::tuple<uint64_t, uint64_t, uint32_t> >, bool >  > _to_read;
+    for (auto &&hpair: remote_read_ext) {
+      auto &l = _to_read[hpair.get<0>()];
+      l.second = hpair.get<2>();
+      for (auto extent: hpair.get<1>()) {
+	l.first.emplace_back(extent.first, extent.second, 0);
       }
     }
-    objects_read_and_reconstruct(
-      _to_read,
-      false,
-      make_gen_lambda_context<
-      map<hobject_t,pair<int, extent_map> > &&, Func>(
-	  std::forward<Func>(on_complete)));
+  objects_read_and_reconstruct(
+  _to_read,
+  false,
+  make_gen_lambda_context<
+  map<hobject_t,pair<int, extent_map> > &&, Func>(
+  std::forward<Func>(on_complete)));
   }
   void kick_reads() {
     while (in_progress_client_reads.size() &&
@@ -355,13 +377,15 @@ public:
     const map<pg_shard_t, vector<pair<int, int>>> need;
     const bool want_attrs;
     GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb;
+    const bool partial_read;
     read_request_t(
       const list<boost::tuple<uint64_t, uint64_t, uint32_t> > &to_read,
       const map<pg_shard_t, vector<pair<int, int>>> &need,
       bool want_attrs,
-      GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb)
+      GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb,
+      bool partial_read = false)
       : to_read(to_read), need(need), want_attrs(want_attrs),
-	cb(cb) {}
+	cb(cb),partial_read(partial_read) {}
   };
   friend ostream &operator<<(ostream &lhs, const read_request_t &rhs);
 
@@ -495,6 +519,7 @@ public:
     // read on a remote shard before it has applied a previous write.  We can
     // remove this after nautilus.
     set<pg_shard_t> pending_apply;
+    set<pg_shard_t> write_to_shards;
     bool write_in_progress() const {
       return !pending_commit.empty() || !pending_apply.empty();
     }
@@ -601,7 +626,10 @@ public:
   IsPGRecoverablePredicate *get_is_recoverable_predicate() const override {
     return new ECRecPred(ec_impl);
   }
-
+ 
+  int get_ec_chunk_count() const  {
+	  return ec_impl->get_chunk_count();
+  }
   int get_ec_data_chunk_count() const override {
     return ec_impl->get_data_chunk_count();
   }
