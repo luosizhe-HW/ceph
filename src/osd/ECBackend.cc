@@ -1919,8 +1919,8 @@ void ECBackend::start_rmw(Op *op, PGTransactionUPtr &&t)
   ceph_assert(op);
   dout(20) << __func__ << ": " << *op << dendl;
   bool cpr = can_partial_read_log(op->hoid);
-  op->ec_patrial_read = cct->_conf->osd_ec_partial_read && cpr;
-  op->ec_patrial_write = cct->_conf->osd_ec_partial_write && cpr;
+  op->ec_partial_read = cct->_conf->osd_ec_partial_read && cpr;
+  op->ec_partial_write = cct->_conf->osd_ec_partial_write && cpr;
   op->plan = ECTransaction::get_write_plan(
     op->ec_partial_read && op->ec_partial_write,
     sinfo,
