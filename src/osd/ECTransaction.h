@@ -21,7 +21,7 @@
 #include "erasure-code/ErasureCodeInterface.h"
 #include "PGTransaction.h"
 #include "ExtentCache.h"
-#include "hi_CoreUtil.h"
+#include "hi_coreutil.h"
 namespace ECTransaction {
   struct WritePlan {
     PGTransactionUPtr t;
@@ -52,12 +52,12 @@ namespace ECTransaction {
 
 	uint64_t projected_size =
 	  hinfo->get_projected_total_logical_size(sinfo);
-
 	uint64_t chunk_size = sinfo.get_chunk_size();
 	  ceph_assert(chunk_size);
        ldpp_dout(dpp, 20) << __func__ << ": projected_size=" << projected_size
         << " projected_total_chunk_size=" << hinfo->get_projected_total_chunk_size()
-	<< " stripe_width=" << sinfo.get_stripe_width() << "chunk_size=" << chunk_size << dendl;
+	<< " stripe_width=" << sinfo.get_stripe_width() << "chunk_size=" << chunk_size
+        << " partial_write="<< partial_write<< dendl;
 
 	if (i.second.deletes_first()) {
 	  ldpp_dout(dpp, 20) << __func__ << ": delete, setting projected size"
@@ -164,6 +164,7 @@ namespace ECTransaction {
 	  } else {
 	    ceph_assert(tail_finish <= projected_size);
 	  }
+
 	   uint64_t hi_head_start = 0, hi_head_len = 0;
 
 	   if(
@@ -172,6 +173,7 @@ namespace ECTransaction {
 		   plan.to_read_chunk_align[i.first].union_insert(hi_head_start, hi_head_len);
 	   }else{
 		   plan.to_read_chunk_align[i.first] = will_write;
+		   partial_write = false;
 	   }
 	}
 
@@ -186,21 +188,20 @@ namespace ECTransaction {
 				  truncating_to - projected_size);
 	  projected_size = truncating_to;
 	}
-
+	if (partial_write){
 	if(plan.to_read.count(i.first) != 0){
 	  map<uint64_t, uint64_t> write_set;
 	  raw_write_set.move_into(write_set);
 	  map<uint64_t, uint64_t> to_read;
 	  plan.to_read[i.first].move_into(to_read);
-	  ldpp_dout(dpp, 20) << __func__ << ": partial_write=" << partial_write << "write_set=" << write_set		<< " to_read=" << to_read << dendl;
-	  
-	  if(partial_write && HiRebuildToread(write_set, chunk_size, to_read)) {
+	  ldpp_dout(dpp, 20) << __func__ << ": partial_write=" << partial_write << "write_set=" << write_set		 << " to_read=" << to_read << dendl;
+	  if(HiRebuildToread(write_set, chunk_size, to_read)) {
 	    ldpp_dout(dpp, 20) << __func__ << ": to_read=" << to_read << dendl;
 	    plan.to_read[i.first].clear();
 	    plan.to_read[i.first].insert(extent_set(to_read));
 	  }
 	}
-
+	}
 	ldpp_dout(dpp, 20) << __func__ << ": " << i.first
 			   << " projected size "
 			   << projected_size
@@ -235,6 +236,7 @@ namespace ECTransaction {
     set<hobject_t> *temp_removed,
     DoutPrefixProvider *dpp,
     bool &have_append);
+
 };
 
 #endif
