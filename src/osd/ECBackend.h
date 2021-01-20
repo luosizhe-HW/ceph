@@ -171,7 +171,7 @@ public:
   };
   bool can_partial_read(const hobject_t &hoid)
   {
-    if ( get_parent()->get_bool().fast_read) {
+    if ( get_parent()->get_pool().fast_read) {
 	    return false;
     }
     set<int> want_to_read;
