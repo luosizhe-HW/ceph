@@ -169,9 +169,11 @@ public:
       func.release()->complete(std::move(results));
     }
   };
-
   bool can_partial_read(const hobject_t &hoid)
   {
+    if ( get_parent()->get_pool().fast_read) {
+	    return false;
+    }
     set<int> want_to_read;
     get_want_to_read_shards(&want_to_read);
 
@@ -187,8 +189,6 @@ public:
   }
 
   void get_off_len_shards( uint64_t off, uint64_t len, set<int>& out);
-
-  bool can_partial_read_log( const hobject_t &hoid);
 
   list<ClientAsyncReadStatus> in_progress_client_reads;
   void objects_read_async(
