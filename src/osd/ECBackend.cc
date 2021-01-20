@@ -1272,7 +1272,7 @@ void ECBackend::handle_sub_read_reply(
         dout(20) << __func__ << " have shard=" << j->first.shard << dendl;
       }
       map<int, vector<pair<int, int>>> dummy_minimum;
-      int err;
+      int err=0;
       dout(20) << __func__ << " minimum_to_decode "<< rop.want_to_read[iter->first] << "have:" << have << dendl;
       if (!rop.to_read.find(iter->first)->second.partial_read && (err = ec_impl->minimum_to_decode(rop.want_to_read[iter->first], have, &dummy_minimum)) < 0){
       dout(20) << __func__ << " minimum_to_decode failed" << dendl;
@@ -1897,23 +1897,6 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
   return ref;
 }
 
-bool ECBackend::can_partial_read_log(const hobject_t &hoid)
-{
-   set<int> want_to_read;
-   get_want_to_read_shards(&want_to_read);
-
-   set<int> have;
-   map<shard_id_t, pg_shard_t> shards;
-   set<pg_shard_t> error_shards;
-   get_all_avail_shards(hoid, error_shards, have, shards, false);
-
-   if (includes(have.begin(), have.end(), want_to_read.begin(), want_to_read.end())){
-	   return true;
-   }
-
-   dout(0) << __func__ <<" : have="<<have<< " want_to_read=" << want_to_read<<" error_shards="<<error_shards<<" shards="<<shards<<" hoid="<<hoid<< dendl;
-   return false;
-}
 void ECBackend::start_rmw(Op *op, PGTransactionUPtr &&t)
 {
   ceph_assert(op);
@@ -2460,24 +2443,29 @@ struct CallClientContexts :
 
     for(auto idx : chunk_idx) {
 	    bufferlist bl;
+	    if (to_decode[idx].length() == 0) {
+		    continue;
+	    }
 	    to_decode[idx].splice(0,ec->sinfo.get_chunk_size(),&bl);
 	    out->claim_append(bl);
     }
   }
 
   void reconstruct(pair<uint64_t, uint64_t> in ,map<int, bufferlist> &to_decode, bufferlist *out) {
+
 	  auto dpp=ec->get_parent()->get_dpp();
 	  ldpp_dout(dpp, 20) << " in: " << in <<dendl;
 
 	  HiEcInfo ec_info(ec->ec_impl->get_data_chunk_count(),ec->ec_impl->get_chunk_count(),
 			   ec->ec_impl->get_chunk_mapping(),ec->sinfo.get_chunk_size(),
 			   ec->sinfo.get_stripe_width());
-
 	  vector<boost::tuple<unsigned int, unsigned int,unsigned int>> chunk_info;
 	  HiReconstructPrepare(ec_info,in,chunk_info);
+
 	  for( auto info : chunk_info)
 		  reconstruct_shard(info.get<0>(), info.get<1>(), info.get<2>(), to_decode, out);
   }
+
   void finish(pair<RecoveryMessages *, ECBackend::read_result_t &> &in) override {
     ECBackend::read_result_t &res = in.second;
     extent_map result;

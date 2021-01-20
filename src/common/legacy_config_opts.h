@@ -666,8 +666,11 @@ OPTION(osd_ignore_stale_divergent_priors, OPT_BOOL) // do not assert on divergen
 // If set to true even after reading enough shards to
 // decode the object, any error will be reported.
 OPTION(osd_read_ec_check_for_errors, OPT_BOOL) // return error if any ec shard has an error
-OPTION(osd_ec_partial_read,OPT_BOOL)
-OPTION(osd_ec_partial_write,OPT_BOOL)
+OPTION(osd_ec_partial_read,OPT_BOOL) //enable ec partial read
+OPTION(osd_ec_partial_write,OPT_BOOL) // enable ec partial write
+OPTION(kpsec_log_fullpath,OPT_STR) // The path to store KPS_EC log
+OPTION(kpsec_log_level, OPT_STR) //The level of kpsec_log
+OPTION(kpsec_log_memlogsize,OPT_U64) // kpsec_memlog_size
 
 // Only use clone_overlap for recovery if there are fewer than
 // osd_recover_clone_overlap_limit entries in the overlap set
