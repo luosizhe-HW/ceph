@@ -21,7 +21,9 @@
 #include "include/ceph_assert.h"
 #include "include/encoding.h"
 #include "common/Formatter.h"
-
+namespace {
+	const uint64_t MAX_CHUNK_END = (1ULL <<40);
+}
 namespace ECUtil {
 
 class stripe_info_t {
@@ -82,8 +84,19 @@ public:
 	  return offset - (offset % chunk_size);
   }
   uint64_t logical_to_next_chunk(uint64_t offset) const {
-	 return (( offset % chunk_size) ?
-		(offset - (offset % chunk_size) + chunk_size) : offset);
+	if (offset > MAX_CHUNK_END || chunk_size > MAX_CHUNK_END){
+		return MAX_CHUNK_END;
+	}
+	uint64_t ret = offset % MAX_CHUNK_END;
+	uint64_t redundant = offset % chunk_size;
+	if(redundant != 0){
+		if (offset - redundant + chunk_size < MAX_CHUNK_END) {
+			ret = offset - redundant + chunk_size;
+		}else {
+			ret = MAX_CHUNK_END;
+		}
+	}
+	return ret ;
   }
   std::pair<uint64_t, uint64_t> offset_len_to_chunk_bounds(
     std::pair<uint64_t, uint64_t> in) const {
