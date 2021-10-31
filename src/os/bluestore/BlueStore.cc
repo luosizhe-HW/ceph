@@ -4071,14 +4071,23 @@ void BlueStore::_set_compression()
 
   compressor = nullptr;
 
-  if (cct->_conf->bluestore_compression_min_blob_size) {
-    comp_min_blob_size = cct->_conf->bluestore_compression_min_blob_size;
-  } else {
+  if (cct->_conf->compaction_opt_space_enabled) { // for compaction
     ceph_assert(bdev);
     if (bdev->is_rotational()) {
-      comp_min_blob_size = cct->_conf->bluestore_compression_min_blob_size_hdd;
+      comp_min_blob_size = cct->_conf->bluestore_compaction_min_blob_size_hdd;
     } else {
-      comp_min_blob_size = cct->_conf->bluestore_compression_min_blob_size_ssd;
+      comp_min_blob_size = cct->_conf->bluestore_compaction_min_blob_size_ssd;
+    }
+  } else {
+    if (cct->_conf->bluestore_compression_min_blob_size) {
+      comp_min_blob_size = cct->_conf->bluestore_compression_min_blob_size;
+    } else {
+      ceph_assert(bdev);
+      if (bdev->is_rotational()) {
+        comp_min_blob_size = cct->_conf->bluestore_compression_min_blob_size_hdd;
+      } else {
+        comp_min_blob_size = cct->_conf->bluestore_compression_min_blob_size_ssd;
+      }
     }
   }
 
@@ -4836,6 +4845,12 @@ int BlueStore::_open_alloc()
     ++num;
     bytes += length;
   }
+  
+  int my_flag = fm->onebit_bitmap_create(db, min_alloc_size);
+  if (my_flag != 0) {
+    ceph_assert(0);
+  }
+
   fm->enumerate_reset();
   dout(1) << __func__ << " loaded " << byte_u_t(bytes)
 	  << " in " << num << " extents"
@@ -6031,16 +6046,26 @@ int BlueStore::mkfs()
     goto out_close_fsid;
 
   // choose min_alloc_size
-  if (cct->_conf->bluestore_min_alloc_size) {
-    min_alloc_size = cct->_conf->bluestore_min_alloc_size;
-  } else {
+  if(cct->_conf->compaction_opt_space_enabled) {
     ceph_assert(bdev);
     if (bdev->is_rotational()) {
-      min_alloc_size = cct->_conf->bluestore_min_alloc_size_hdd;
+      min_alloc_size = cct->_conf->bluestore_compaction_min_alloc_size_hdd;
     } else {
-      min_alloc_size = cct->_conf->bluestore_min_alloc_size_ssd;
+      min_alloc_size = cct->_conf->bluestore_compaction_min_alloc_size_ssd;
+    }
+  } else {
+    if (cct->_conf->bluestore_min_alloc_size) {
+      min_alloc_size = cct->_conf->bluestore_min_alloc_size;
+    } else {
+      ceph_assert(bdev);
+      if (bdev->is_rotational()) {
+        min_alloc_size = cct->_conf->bluestore_min_alloc_size_hdd;
+      } else {
+        min_alloc_size = cct->_conf->bluestore_min_alloc_size_ssd;
+      }
     }
   }
+
   _validate_bdev();
 
   // make sure min_alloc_size is power of 2 aligned.
@@ -6786,7 +6811,8 @@ int BlueStore::_fsck_check_extents(
         e.offset, e.length, granularity, used_blocks,
         [&](uint64_t pos, mempool_dynamic_bitset &bs) {
 	  ceph_assert(pos < bs.size());
-	  if (bs.test(pos)) {
+    bool compaction_bs_check = false;
+    if (bs.test(pos) && compaction_bs_check) {
 	    if (repairer) {
 	      repairer->note_misreference(
 	        pos * min_alloc_size, min_alloc_size, !already);
@@ -6812,6 +6838,7 @@ int BlueStore::_fsck_check_extents(
       }
     }
   }
+  fm->onebit_check_bitmap(extents, compressed, min_alloc_size);
   return errors;
 }
 
@@ -7402,6 +7429,9 @@ void BlueStore::_fsck_check_objects(FSCKDepth depth,
     CollectionRef c;
     int64_t pool_id = -1;
     spg_t pgid;
+  
+    fm->convert_num();
+
     for (it->lower_bound(string()); it->valid(); it->next()) {
       dout(30) << __func__ << " key "
         << pretty_binary_string(it->key()) << dendl;
@@ -9157,21 +9187,55 @@ int BlueStore::_do_read(
       }
       compressed_blob_bls.push_back(bufferlist());
       bufferlist& bl = compressed_blob_bls.back();
-      r = bptr->get_blob().map(
-	0, bptr->get_blob().get_ondisk_length(),
-	[&](uint64_t offset, uint64_t length) {
-	  int r;
-	  // use aio if there are more regions to read than those in this blob
-	  if (num_regions > r2r.size()) {
-	    r = bdev->aio_read(offset, length, &bl, &ioc);
-	  } else {
-	    r = bdev->read(offset, length, &bl, &ioc, false);
-	  }
-	  if (r < 0)
+
+      bufferlist temp_bl;
+      TagReadUsage read_param;
+      read_param.isAio = (num_regions > r2r.size());
+
+      CompactionReadInit(bptr->get_blob().get_ondisk_length(),
+                            bptr->get_blob().find_extents_offset(),
+                            bptr->get_blob().get_chunk_size(block_size),
+                            bptr->get_blob().analyze_allocate_contiguous(),
+                            read_param);
+
+      CompactionReadRegion(read_param.pextentOffset,
+                              read_param.pextentLength,
+                              read_param.blobReadLength,
+                              read_param.chunkSize,
+                              bptr->get_blob().is_compressed());
+      
+      r = bptr->get_blob().map_compaction_read(
+          0, read_param.blobReadLength, read_param.chunkSize, read_param.isSplit, read_param.isContinuous,
+          [&](uint64_t offset, uint64_t length, uint64_t plength=0) {
+          int r;
+          // use aio if there are more regions to read than those in this blob
+          if (num_regions > r2r.size() && read_param.isContinuous) {
+            r = bdev->read(offset, length, &temp_bl, &ioc, false);
+            if (!read_param.isSplit) {
+              temp_bl.splice(read_param.pextentOffset % read_param.chunkSize,
+                            bptr->get_blob().get_ondisk_length(), &bl);
+            }
+          } else if (!read_param.isContinuous) {
+            temp_bl.clear();
+            ceph_assert(temp_bl.length() == 0);
+            r = bdev->read(offset, length, &temp_bl, &ioc, false);
+            temp_bl.splice(read_param.pextentOffset % read_param.chunkSize, plength, &bl);
+          } else {
+            r = bdev->read(offset, length, &temp_bl, &ioc, false);
+            temp_bl.splice(read_param.pextentOffset % read_param.chunkSize,
+                         bptr->get_blob().get_ondisk_length(), &bl);
+          }
+          if (r < 0)
             return r;
           return 0;
-	});
-      if (r < 0) {
+          });
+
+      if (read_param.isAio && read_param.isSplit) {
+        temp_bl.splice(read_param.pextentOffset % read_param.chunkSize, bptr->get_blob().get_ondisk_length(), &bl);
+        ceph_assert(bptr->get_blob().get_ondisk_length() == bl.length());
+      }
+
+     if (r < 0) {
         derr << __func__ << " bdev-read failed: " << cpp_strerror(r) << dendl;
         if (r == -EIO) {
           // propagate EIO to caller
@@ -10321,6 +10385,10 @@ void BlueStore::_txc_state_proc(TransContext *txc)
     switch (txc->state) {
     case TransContext::STATE_PREPARE:
       txc->log_state_latency(logger, l_bluestore_state_prepare_lat);
+      // compaction process
+      if (txc->compaction_txn) {
+        _compaction_queue(txc);
+      }
       if (txc->ioc.has_pending_aios()) {
 	txc->state = TransContext::STATE_AIO_WAIT;
 	txc->had_ios = true;
@@ -11444,6 +11512,360 @@ int BlueStore::_deferred_replay()
   return r;
 }
 
+void BlueStore::_compaction_batch_padding(
+                                          TransContext *txc,
+                                          WriteContext *wctx,
+                                          uint64_t *need,
+                                          uint64_t *need_compaction,
+                                          uint64_t chunk_size)
+{
+  int wi_size = wctx->writes.size();
+  dout(20) << __func__ << " total blob number: 0x" << std::hex << wi_size
+    << " need value before padding: 0x" << std::hex << *need_compaction << dendl;
+  uint64_t need_align = p2roundup(*need_compaction, chunk_size);
+  uint64_t batch_padding_length = need_align - *need_compaction;
+  while ((wi_size-1) >= 0 ){
+       dout(20) << __func__ << " padding blob's length: 0x" << std::hex
+         << wctx->writes[wi_size-1].blob_length << dendl;
+       if (wctx->writes[wi_size-1].compressed){
+       dout(20) << __func__ << " length need to padding: 0x" << std::hex << batch_padding_length << dendl;
+       if (batch_padding_length >
+           (wctx->writes[wi_size-1].blob_length - wctx ->writes[wi_size-1].compressed_bl.length())){
+       batch_padding_length -= wctx->writes[wi_size-1].blob_length
+         - wctx->writes[wi_size-1].compressed_bl.length();
+       txc->statfs_delta.compressed_allocated() += wctx->writes[wi_size-1].blob_length
+         - wctx->writes[wi_size-1].compressed_bl.length();
+       *need_compaction += wctx->writes[wi_size-1].blob_length
+         -wctx->writes[wi_size-1].compressed_bl.length();
+       wctx->writes[wi_size-1].compressed_bl.append_zero(wctx->writes[wi_size-1].blob_length
+         -wctx->writes[wi_size-1].compressed_bl.length());
+       dout(20) << __func__ << " padding blob number(start from 1 to wi_size): 0x" << std::hex
+         << wi_size << dendl;
+       }else {
+          txc->statfs_delta.compressed_allocated() += batch_padding_length;
+          wctx->writes[wi_size-1].compressed_bl.append_zero(batch_padding_length);
+          *need_compaction += batch_padding_length;
+          *need = *need_compaction;
+          dout(20) << __func__ << " padding blob number(start from 1 to wi_size): 0x" << std::hex << wi_size
+            << " need after padding: 0x" << std::hex << *need << dendl;
+          break;
+       }
+     }
+     wi_size--;  
+  }
+  return;
+}
+
+void BlueStore::_compaction_block_usage(
+            TransContext *txc,
+            OnodeRef o,
+            bluestore_pextent_t p)
+{
+   TagBlockUsage param;
+   map<uint64_t, int8_t>::iterator iter;
+   CompactionBlockUsageInit(p.offset, p.length, min_alloc_size, param);
+
+   while (param.currentOffset <param.endPos && param.leftLength >0){
+      param.baseOffset = p2align(param.currentOffset, min_alloc_size);
+      iter = o->onode.chunk_map.find(param.baseOffset);
+      if (iter != o->onode.chunk_map.end()){
+          iter->second++;
+          dout(10) << __func__ << " p.offset: 0x" << std::hex << p.offset
+            << " p.length: 0x" << std::hex <<p.length
+            << " base_offset: 0x" << std::hex << param.baseOffset
+            << " add iter->second: " << std::dec << (int)iter->second << dendl;
+      }else {
+         o->onode.chunk_map.insert(pair<uint64_t, int8_t>(param.baseOffset, 1));
+         iter = o->onode.chunk_map.find(param.baseOffset);
+         ceph_assert(iter != o->onode.chunk_map.end());
+         dout(10) << __func__ << "p.offset: 0x" << std::hex << p.offset
+           << " p.length: 0x" << std::hex << p.length
+           << " base_offset: 0x" << std::hex << param.baseOffset
+           << " insert iter->second: " << std::dec << (int)iter->second << dendl;
+      }
+      CompactionBlockUsageInternal(min_alloc_size, p.offset, param);
+      dout(10) << __func__ << " left_length: 0x" << std::hex << param.leftLength << dendl;
+   }
+}
+
+void BlueStore::_choose_compaction_write_pattern(
+       TransContext *txc,
+       OnodeRef o,
+       BlobRef b,
+       bufferlist& l,
+       uint64_t b_off,
+       bool is_deferred)
+{
+    if (is_deferred){
+        dout(20) << __func__ << "compaction length 0x" << std::hex
+          << l.length() << std::dec << "compaction mode: deferred write" <<dendl;
+        bluestore_deferred_op_t *op = _get_deferred_op(txc, o);
+        op->op = bluestore_deferred_op_t::OP_WRITE;
+        int cpr = b->get_blob().map_compaction_write(
+                 b_off, l.length(),
+                 [&](uint64_t compaction_off, uint64_t compaction_len){
+                 op->extents.emplace_back(bluestore_pextent_t(compaction_off, compaction_len));
+                 dout(20) << __func__ << " compaction offset value: 0x" << std::hex << compaction_off
+                 << " compaction length value: 0x" << std::hex << compaction_len << dendl;
+                 return 0;
+                 });
+        ceph_assert(cpr == 0);
+        op->data = l;
+        logger->inc(l_bluestore_write_small_deferred);
+    }else{
+    dout(20) << __func__ << " compaction length: 0x" << std::hex
+      << l.length() << std::dec << " compaction mode: simple write" << dendl;
+    compaction_op *op = _get_compaction_op(txc, o);
+    op->pattern = compaction_op::OP_COMPACTION;
+    int cpr = b->get_blob().map_compaction_write(
+                b_off, l.length(),
+                [&](uint64_t compaction_off, uint64_t compaction_len){
+                op->unaligned_extents.emplace_back(bluestore_pextent_t(compaction_off, compaction_len));
+                dout(20) << __func__ << " compaction offset value: 0x" << std::hex << compaction_off
+                << " compaction length value: 0x" << std::hex << compaction_len << dendl;
+                return 0;
+                });
+    ceph_assert(cpr == 0);
+    op->compaction_data = l;
+    logger->inc(l_bluestore_write_small_new);
+    }
+}
+
+void BlueStore::_compaction_queue(TransContext *txc)
+{
+  dout(20) << __func__ << " txc " << txc << " osr " << txc->osr <<dendl;
+  compaction_lock.lock();
+  if (!txc->osr -> compaction_pending){
+     dout(10) << __func__ << " !txc->osr->compaction_pending " << dendl;
+     txc->osr->compaction_pending = new CompactionBatch(cct, txc->osr.get());
+  }
+  ++compaction_queue_size;
+  compaction_transaction& wt = *txc->compaction_txn;
+  for (auto opi = wt.ops.begin(); opi != wt.ops.end(); ++opi){
+     const auto& op = *opi;
+     ceph_assert(op.pattern == compaction_op::OP_COMPACTION);
+     bufferlist::const_iterator p = op.compaction_data.begin();
+     for (auto e : op.unaligned_extents){
+     txc ->osr->compaction_pending->write_queue(cct, wt.seq, e.offset, e.length, p);
+     }
+  }
+  if (!txc->osr->compaction_running) {
+     dout(10) << __func__ << " check compaction switch: " << txc->is_compaction << dendl;
+     _compaction_submit_batch(txc, txc->osr.get());
+  }
+}
+
+void BlueStore::_compaction_submit_batch(
+                 TransContext *txc,
+                 OpSequencer *osr)
+{
+    uint64_t compaction_batch_begin = 0, compaction_block_off = 0;
+    bufferlist bl_batch;
+
+    auto cbh_p = osr->compaction_pending;
+    compaction_queue_size -= cbh_p->seq_bytes.size();
+    ceph_assert(compaction_queue_size >= 0);
+
+    osr->compaction_running = osr->compaction_pending;
+    osr->compaction_pending = nullptr;
+
+    compaction_lock.unlock();
+    auto compaction_io = cbh_p->iomap.begin();
+    for (;;) {
+      if (compaction_io == cbh_p->iomap.end() || compaction_io->first != compaction_block_off){
+         if (bl_batch.length()){
+            dout(20) << __func__ << " write 0x " << std::hex
+              << compaction_batch_begin << "~" << bl_batch.length()
+              << " crc " << bl_batch.crc32c(-1) << std::dec << dendl;
+            int cpr = bdev ->aio_write(compaction_batch_begin, bl_batch, &txc->ioc, false);
+            dout(20) << __func__ << " double queue aio_write: 0x " << std::hex <<cpr <<dendl;
+            ceph_assert(cpr == 0);
+         }
+         if (compaction_io == cbh_p->iomap.end()){
+           break;
+         }
+         compaction_batch_begin = 0;
+         compaction_block_off = compaction_io->first;
+         bl_batch.clear();
+      }
+      dout(20) << __func__ << " compaction_io seq: 0x" << std::hex << compaction_io->second.seq << " 0x "
+        << std::hex << compaction_block_off << "~" << compaction_io->second.bl.length() << std::dec
+        <<dendl;
+      dout(20) << __func__ << " compaction_io offset for each compress block: 0x"
+        << std::hex << compaction_block_off <<dendl;
+      dout(20) << __func__ << " compaction_io length for each compress block: 0x"
+        << std::hex << compaction_io->second.bl.length() << dendl;
+      if (!bl_batch.length()){
+        compaction_batch_begin = compaction_block_off;
+      }
+      compaction_block_off += compaction_io->second.bl.length();
+      bl_batch.claim_append(compaction_io->second.bl);
+      ++compaction_io;
+    }
+    _compaction_aio_finish(txc->osr.get());
+}
+
+void BlueStore::_compaction_aio_finish(OpSequencer *osr)
+{
+    dout(10) << __func__ << " osr " << osr << dendl;
+    ceph_assert(osr->compaction_running);
+    CompactionBatch *cbh_r = osr->compaction_running;
+    std::lock_guard l(compaction_lock);
+    ceph_assert(osr->compaction_running == cbh_r);
+    osr->compaction_running = nullptr;
+    delete cbh_r;
+}
+
+BlueStore::compaction_op *BlueStore::_get_compaction_op(
+                   TransContext *txc,
+                   OnodeRef o)                                    
+{
+     if (!txc->compaction_txn){
+        txc->compaction_txn = new compaction_transaction;
+     }
+     txc->compaction_txn->ops.push_back(compaction_op());
+     return &txc->compaction_txn->ops.back();
+}
+
+void BlueStore::_compaction_block_release(
+               TransContext *txc,
+               OnodeRef o,
+               bluestore_pextent_t e,
+               uint64_t min_alloc_size)
+{
+  TagBlockRelease release_param;
+  map < uint64_t, int8_t >::iterator iter;
+  CompactionBlockReleaseInit(min_alloc_size, e.offset, e.length, release_param);
+
+  while(release_param.currentPos < release_param.endPos && release_param.leftLength > 0) {
+       release_param.baseOffset = p2align(release_param.currentPos, release_param.chunkSize);
+       iter = o->onode.chunk_map.find(release_param.baseOffset);
+       dout(20) << __func__ << " iter->second: " << std::dec << (int)iter->second << dendl;
+       iter->second--;
+       ceph_assert(iter != o->onode.chunk_map.end());
+       ceph_assert(iter->second >= 0);
+       if (iter->second == 0){
+          release_param.releaseOffset = release_param.baseOffset;
+          dout(20) << __func__ << "  release successful, current chunk is empty. "
+            << " e.offset: 0x" << std::hex << e.offset << " e.length: 0x" << std::hex << e.length
+            << " release_offset: 0x" << std::hex << release_param.releaseOffset
+            << " release_length: 0x" << std::hex << release_param.chunkSize << dendl;
+          txc->released.insert(release_param.releaseOffset, release_param.chunkSize);
+          o->onode.chunk_map.erase(release_param.releaseOffset);//delete release_offset from chunk_map
+          // for debug
+          ceph_assert((o->onode.chunk_map.find(release_param.baseOffset)) == (o->onode.chunk_map.end()));
+          dout(20) << __func__ << " There is no information about offset: 0x" << std::hex << release_param.releaseOffset
+            << " in chunk_map. " << dendl;
+       } else {
+          dout(20) << __func__ << " release failed, " << std::dec << (int) iter->second
+            << " compressed block(s) still exist in current chunk. " << " e.offset: 0x"
+            << std::hex << e.offset << " e.length: 0x" << std::hex << e.length <<dendl;
+       }
+       CompactionBlockReleaseInternal(e.offset, release_param);
+       dout(20) << __func__ << " left_length: 0x"
+         << std::hex << release_param.leftLength << " , " << release_param.currentPos << dendl;
+       // Space that needs to be released but cannot be identified by the system (4K granularity).
+       txc->statfs_delta.allocated() -= release_param.forwardStep;
+       txc->statfs_delta.compressed_allocated() -= release_param.forwardStep;
+  }
+  ceph_assert(release_param.leftLength == 0);
+}
+
+// CompactionBatch
+#undef dout_prefix
+#define dout_prefix *_dout << "bluestore.CompactionBatch(" << this << ") "
+
+void BlueStore::CompactionBatch::write_queue(
+              CephContext *cct,
+              uint64_t seq,
+              uint64_t offset,
+              uint64_t length,
+              bufferlist::const_iterator& bl_batch)
+{
+   _relocate(cct, offset, length);
+   auto i = iomap.insert(make_pair(offset, compaction_io()));
+   ceph_assert(i.second);
+   i.first->second.seq = seq;
+   bl_batch.copy(length, i.first->second.bl);
+   dout(20) << __func__ << " seq " << seq
+      << " 0x " << std::hex << offset << "~" << length
+      << " crc " << i.first->second.bl.crc32c(-1)
+      << std::dec <<dendl; 
+      seq_bytes[seq] += length;
+}
+
+void BlueStore::CompactionBatch::_relocate(
+               CephContext *cct,
+               uint64_t offset,
+               uint64_t length)
+{
+   generic_dout(20) << __func__ << " 0x " << std::hex << offset << "~" << length
+     << std::dec << dendl;
+   auto p = iomap.lower_bound(offset);
+   if (p!= iomap.begin()){
+      --p;
+      auto end = p->first + p ->second.bl.length();
+      if (end > offset) {
+         bufferlist head;
+         head.substr_of(p->second.bl, 0, offset - p->first);
+         dout(20) << __func__ << " keep head " << p->second.seq
+           << " 0x " << std::hex << p->first << "~" << p->second.bl.length()
+           << " -> 0x " << head.length() << std::dec << dendl;
+         auto i = seq_bytes.find(p->second.seq);
+         ceph_assert(i != seq_bytes.end());
+         if (end > offset + length ){
+             bufferlist tail;
+             tail.substr_of(p->second.bl, offset + length -p->first,
+                            end - (offset + length));
+             dout(20) << __func__ << " keep tail " << p->second.seq
+               << " 0x " << std::hex << p->first << "~" << p->second.bl.length()
+               << " -> 0x " << tail.length() << std::dec << dendl;
+             auto &n = iomap[offset + length];
+             n.bl.swap(tail);
+             n.seq = p->second.seq;
+             i->second -= length;
+         }
+         else {
+           i->second -= end -offset;
+         }
+         ceph_assert(i->second >= 0);
+         p->second.bl.swap(head);
+      }
+      ++p;
+   }
+   while (p != iomap.end()){
+       if(p->first >= offset +length){
+       break;
+       }
+       auto i = seq_bytes.find(p->second.seq);
+       ceph_assert(i != seq_bytes.end());
+       auto end = p->first + p->second.bl.length();
+       if (end > offset +length){
+           unsigned drop_front = offset +length - p->first;
+           unsigned keep_tail = end - (offset +length);
+           dout(20) << __func__ << " truncate front " << p->second.seq
+             << " 0x " << std::hex << p->first << "~" << p->second.bl.length()
+             << " drop_front 0x " << drop_front << " keep_tail 0x " << keep_tail
+             << " to 0x " << (offset +length) << "~" << keep_tail
+             << std::dec << dendl;
+           auto &s =iomap[offset +length];
+           s.seq = p->second.seq;
+           s.bl.substr_of(p->second.bl, drop_front, keep_tail);
+           i->second -= drop_front;
+       }
+       else {
+           dout(20) << __func__ << " drop " << p->second.seq
+             << " 0x " << std::hex << p->first << "~" << p->second.bl.length()
+             << std::dec << dendl;
+           i->second -= p->second.bl.length();
+       }
+       ceph_assert(i->second >= 0);
+       p = iomap.erase(p);
+   }
+}
+
+#undef dout_prefix
+#define dout_prefix *_dout << "bluestore(" << path << ")" 
 // ---------------------------
 // transactions
 
@@ -12508,9 +12930,29 @@ int BlueStore::_do_alloc_write(
 
   // compress (as needed) and calc needed space
   uint64_t need = 0;
+  uint64_t need_compaction = 0;
   auto max_bsize = std::max(wctx->target_blob_size, min_alloc_size);
+  bool global_compaction_flag = false;
+  bool compaction_enable = cct->_conf->compaction_enabled;
+  if (c && compaction_enable) {
+    for (auto& wi : wctx->writes) {
+      BlobRef b_com = wi.b;
+      bluestore_blob_t& dblob_com = b_com->dirty_blob();
+
+      if (wi.blob_length > min_alloc_size) {
+        global_compaction_flag = true;
+      } else if (dblob_com.is_partial_allocation() || !(wi.b_off == 0) || !(wi.blob_length == wi.bl.length())) {
+        global_compaction_flag = false;
+        break;
+      } else {
+        global_compaction_flag = false;
+        break;
+      }
+    }
+  }
+
   for (auto& wi : wctx->writes) {
-    if (c && wi.blob_length > min_alloc_size) {
+      if (c && wi.blob_length > min_alloc_size || global_compaction_flag) {
       auto start = mono_clock::now();
 
       // compress
@@ -12527,7 +12969,9 @@ int BlueStore::_do_alloc_write(
       // do an approximate (fast) estimation for resulting blob size
       // that doesn't take header overhead  into account
       uint64_t result_len = p2roundup(compressed_len, min_alloc_size);
-      if (r == 0 && result_len <= want_len && result_len < wi.blob_length) {
+      if ((r == 0 && result_len <= want_len && result_len < wi.blob_length) || global_compaction_flag) {
+  wi.compacted = global_compaction_flag; // master switch for compaction
+  wi.compaction_deferred = cct->_conf->compaction_deferred_write;
 	bluestore_compression_header_t chdr;
 	chdr.type = c->get_type();
 	chdr.length = t.length();
@@ -12536,22 +12980,31 @@ int BlueStore::_do_alloc_write(
 
 	compressed_len = wi.compressed_bl.length();
 	result_len = p2roundup(compressed_len, min_alloc_size);
-	if (result_len <= want_len && result_len < wi.blob_length) {
+	if (result_len <= want_len && result_len < wi.blob_length || global_compaction_flag) {
 	  // Cool. We compressed at least as much as we were hoping to.
 	  // pad out to min_alloc_size
-	  wi.compressed_bl.append_zero(result_len - compressed_len);
-	  wi.compressed_len = compressed_len;
+    if (!global_compaction_flag) {
+      wi.compressed_bl.append_zero(result_len - compressed_len);
+      logger->inc(l_bluestore_write_pad_bytes, result_len - compressed_len);
+    }
+
+    wi.compressed_len = compressed_len;
 	  wi.compressed = true;
-	  logger->inc(l_bluestore_write_pad_bytes, result_len - compressed_len);
-	  dout(20) << __func__ << std::hex << "  compressed 0x" << wi.blob_length
+	 
+    dout(20) << __func__ << std::hex << "  compressed 0x" << wi.blob_length
 		   << " -> 0x" << compressed_len << " => 0x" << result_len
 		   << " with " << c->get_type()
 		   << std::dec << dendl;
 	  txc->statfs_delta.compressed() += compressed_len;
 	  txc->statfs_delta.compressed_original() += wi.blob_length;
-	  txc->statfs_delta.compressed_allocated() += result_len;
+    if (global_compaction_flag) {
+      txc->statfs_delta.compressed_allocated() += compressed_len;
+    } else {
+      txc->statfs_delta.compressed_allocated() += result_len;
+    }
 	  logger->inc(l_bluestore_compress_success_count);
 	  need += result_len;
+    need_compaction += compressed_len;
 	} else {
 	  rejected = true;
 	}
@@ -12564,6 +13017,7 @@ int BlueStore::_do_alloc_write(
 		 << dendl;
 	logger->inc(l_bluestore_compress_rejected_count);
 	need += wi.blob_length;
+  need_compaction += wi.blob_length;
       } else {
 	rejected = true;
       }
@@ -12578,6 +13032,7 @@ int BlueStore::_do_alloc_write(
 		 << std::dec << dendl;
 	logger->inc(l_bluestore_compress_rejected_count);
 	need += wi.blob_length;
+  need_compaction += wi.blob_length;
       }
       log_latency("compress@_do_alloc_write",
 	l_bluestore_compress_lat,
@@ -12585,10 +13040,14 @@ int BlueStore::_do_alloc_write(
 	cct->_conf->bluestore_log_op_age );
     } else {
       need += wi.blob_length;
+      need_compaction += wi.blob_length;
     }
   }
+  if (global_compaction_flag) {
+    _compaction_batch_padding(txc, wctx, &need, &need_compaction, min_alloc_size);
+  }
   PExtentVector prealloc;
-  prealloc.reserve(2 * wctx->writes.size());;
+  prealloc.reserve(2 * wctx->writes.size());
   int64_t prealloc_left = 0;
   prealloc_left = alloc->allocate(
     need, min_alloc_size, need,
@@ -12677,6 +13136,9 @@ int BlueStore::_do_alloc_write(
     }
     for (auto& p : extents) {
       txc->allocated.insert(p.offset, p.length);
+      if (wi.compressed || global_compaction_flag) { // compaction switch
+        _compaction_block_usage(txc, o, p);
+      }
     }
     dblob.allocated(p2align(b_off, min_alloc_size), final_length, extents);
 
@@ -12708,7 +13170,7 @@ int BlueStore::_do_alloc_write(
 
     // queue io
     if (!g_conf()->bluestore_debug_omit_block_device_write) {
-      if (l->length() <= prefer_deferred_size.load()) {
+      if (l->length() <= prefer_deferred_size.load() && !(global_compaction_flag)) {
 	dout(20) << __func__ << " deferring small 0x" << std::hex
 		 << l->length() << std::dec << " write via deferred" << dendl;
 	bluestore_deferred_op_t *op = _get_deferred_op(txc, o);
@@ -12723,12 +13185,16 @@ int BlueStore::_do_alloc_write(
 	op->data = *l;
 	logger->inc(l_bluestore_write_small_deferred);
       } else {
-	b->get_blob().map_bl(
-	  b_off, *l,
-	  [&](uint64_t offset, bufferlist& t) {
-	    bdev->aio_write(offset, t, &txc->ioc, false);
-	  });
-	logger->inc(l_bluestore_write_small_new);
+        if (global_compaction_flag || wi.compaction_deferred) {
+          _choose_compaction_write_pattern(txc, o, b, *l, b_off, wi.compaction_deferred);
+        } else {
+          b->get_blob().map_bl(
+          b_off, *l,
+          [&](uint64_t offset, bufferlist& t) {
+            bdev->aio_write(offset, t, &txc->ioc, false);
+          });
+          logger->inc(l_bluestore_write_small_new);
+        }
       }
     }
   }
@@ -12792,10 +13258,11 @@ void BlueStore::_wctx_finish(
     b->discard_unallocated(c.get());
     for (auto e : r) {
       dout(20) << __func__ << "  release " << e << dendl;
-      txc->released.insert(e.offset, e.length);
-      txc->statfs_delta.allocated() -= e.length;
-      if (blob.is_compressed()) {
-        txc->statfs_delta.compressed_allocated() -= e.length;
+      if (!blob.is_compressed()) {
+        txc->released.insert(e.offset, e.length);
+        txc->statfs_delta.allocated() -= e.length;
+      } else {
+        _compaction_block_release(txc, o, e, min_alloc_size);
       }
     }
     delete &lo;
