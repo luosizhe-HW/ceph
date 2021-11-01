@@ -10,8 +10,16 @@
 #include <ostream>
 #include "kv/KeyValueDB.h"
 
+#include "BlueStore.h"
+
 class FreelistManager {
 public:
+  map<uint64_t, int8_t> new_bitmap;
+  vector<string> count_array;
+  vector<string> bit_array_one;
+  vector<string> bit_array_two;
+  vector<int8_t> count_number;
+
   CephContext* cct;
   FreelistManager(CephContext* cct) : cct(cct) {}
   virtual ~FreelistManager() {}
@@ -48,6 +56,24 @@ public:
   virtual uint64_t get_alloc_units() const = 0;
   virtual uint64_t get_alloc_size() const = 0;
 
+  //==============================================================
+  //2 bit counting version function
+  //1.save kv into db
+  virtual void onebit_xor(uint64_t offset, KeyValueDB::Transaction txn, uint64_t min_alloc_size) = 0;
+  //2.new bitmap build during restart
+  virtual int onebit_bitmap_create(KeyValueDB *kvdb, uint64_t min_alloc_size) = 0;
+  //3.check during restart
+  virtual void onebit_check_bitmap(const PExtentVector& extents, bool compressed, uint64_t min_alloc_size) = 0;
+  //4.convert bit to number
+  virtual void convert_num() = 0;
+  //5.sum of counting
+  virtual int64_t reuse_count() = 0;
+  //6.plus function
+  virtual void plus_function(uint64_t offset, uint64_t min_alloc_size) = 0;
+  //7.minus function
+  virtual void minus_function(uint64_t offset, uint64_t min_alloc_size) = 0;
+  //8.zero check
+  virtual int zero_check_function(uint64_t offset, uint64_t min_alloc_size) = 0;
 };
 
 

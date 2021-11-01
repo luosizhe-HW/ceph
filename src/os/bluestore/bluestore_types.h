@@ -702,6 +702,90 @@ public:
     return 0;
   }
   template<class F>
+  int map_compaction_write(uint64_t x_off, uint64_t x_len, F&& f) const{
+	  static_assert(std::is_invocable_r_v<int, F, uint64_t, uint64_t>);
+
+	  auto p = extents.begin();
+	  ceph_assert( p!= extents.end());
+	  while(x_off >= p->length){
+		  x_off -= p->length;
+		  ++p;
+		  ceph_assert(p != extents.end());
+	  }
+	  while(x_len > 0){
+		  ceph_assert( p != extents.end());
+		  uint64_t l = std::min(p->length-x_off, x_len);
+		  int r = f(p->offset + x_off, l);
+		  if(r<0)
+			  return r;
+		  x_off = 0;
+		  x_len -= l;
+		  ++p;
+	  }
+	  return 0;
+  }
+
+template<class F>
+int map_compaction_read(uint64_t x_off, uint64_t x_len, uint64_t chunk_size, bool is_split,
+			bool is_continuous, F&& f) const{
+	static_assert(std::is_invocable_r_v<int, F, uint64_t, uint64_t>);
+
+	auto p = extents.begin();
+	ceph_assert(p != extents.end());
+	while(x_off >= p->length){
+		x_off -= p->length;
+		++p;
+		ceph_assert(p != extents.end());
+	}
+	if(is_continuous){
+		if(!is_split){
+			while(x_len > 0){
+				ceph_assert(p!=extents.end());
+				uint64_t l = x_len;
+				uint64_t offset_align = p->offset - p->offset % chunk_size;
+				int r = f(offset_align, l);
+				if(r < 0)
+					return r;
+				x_len -= l;
+				++p;
+			}
+		}
+		else{
+		  uint64_t offset_align = p->offset - p->offset % chunk_size;
+		  while(x_len > 0){
+			  uint64_t l = std::min(chunk_size, x_len);
+			  int r = f(offset_align, l);
+			  offset_align += l;
+			  if(r < 0)
+			      return r;
+			  x_len -= l;
+			  ceph_assert(x_len>=0);
+		  }
+		}
+		ceph_assert(x_len == 0);
+	}
+	else{
+	   uint32_t len = 0;
+	   for(auto &a:extents){
+		   len += a.length;
+	   }
+	   while(len>0){
+	       ceph_assert(p!=extents.end());
+	       uint64_t read_begin = p->offset - p->offset % chunk_size;
+	       uint64_t read_end = (-(-(p->offset + p->length) & -chunk_size));
+	       uint64_t l = read_end - read_begin;
+	       int r = f(read_begin, l, p->length);
+	       if(r<0)
+		       return r;
+	       len -= p->length;
+	       ++p;
+	   }
+	   ceph_assert(len==0);
+	}
+	return 0;
+}
+
+template<class F>
   void map_bl(uint64_t x_off,
 	      bufferlist& bl,
 	      F&& f) const {
@@ -734,6 +818,26 @@ public:
       len += p.length;
     }
     return len;
+  }
+
+  bool analyze_allocate_contiguous() const{
+    auto p = extents.begin();
+    uint64_t front = p->offset;
+    uint64_t tail = p->offset + p->length;
+    uint32_t len = 0;
+
+    for(p = extents.begin(); p != extents.end(); p++){
+	    len += p->length;
+	    front = std::min(p->offset, front);
+	    tail = std::max(p->offset + p->length, tail);
+    }
+    return ((tail - front) == len);
+  }
+
+  uint64_t find_extents_offset() const{
+    auto p = extents.begin();
+    uint64_t off = p->offset;
+    return off;
   }
 
   uint32_t get_logical_length() const {
@@ -841,6 +945,7 @@ public:
 
   void split(uint32_t blob_offset, bluestore_blob_t& rb);
   void allocated(uint32_t b_off, uint32_t length, const PExtentVector& allocs);
+  bool is_partial_allocation();
   void allocated_test(const bluestore_pextent_t& alloc); // intended for UT only
 
   /// updates blob's pextents container and return unused pextents eligible
@@ -891,6 +996,7 @@ ostream& operator<<(ostream& out, const bluestore_shared_blob_t& o);
 struct bluestore_onode_t {
   uint64_t nid = 0;                    ///< numeric id (locally unique)
   uint64_t size = 0;                   ///< object size
+  map<uint64_t, int8_t> chunk_map;
   map<mempool::bluestore_cache_other::string, bufferptr> attrs;        ///< attrs
 
   struct shard_info {
@@ -954,6 +1060,7 @@ struct bluestore_onode_t {
     DENC_START(1, 1, p);
     denc_varint(v.nid, p);
     denc_varint(v.size, p);
+    denc(v.chunk_map, p);
     denc(v.attrs, p);
     denc(v.flags, p);
     denc(v.extent_map_shards, p);

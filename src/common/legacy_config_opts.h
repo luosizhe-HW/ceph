@@ -94,6 +94,16 @@ OPTION(xio_max_conns_per_portal, OPT_INT) // max xio_connections per portal/ctx
 OPTION(xio_transport_type, OPT_STR) // xio transport type: {rdma or tcp}
 OPTION(xio_max_send_inline, OPT_INT) // xio maximum threshold to send inline
 
+// compaction
+OPTION(compaction_enabled, OPT_BOOL)
+OPTION(compaction_opt_space_enabled, OPT_BOOL)
+OPTION(compaction_deferred_write, OPT_BOOL)
+OPTION(bluestore_compaction_min_alloc_size_hdd, OPT_U32)
+OPTION(bluestore_compaction_min_alloc_size_ssd, OPT_U32)
+OPTION(bluestore_compaction_min_blob_size_hdd, OPT_U32)
+OPTION(bluestore_compaction_min_blob_size_ssd, OPT_U32)
+
+
 OPTION(compressor_zlib_isal, OPT_BOOL)
 OPTION(compressor_zlib_level, OPT_INT) //regular zlib compression level, not applicable to isa-l optimized version
 

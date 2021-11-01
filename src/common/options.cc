@@ -806,6 +806,43 @@ std::vector<Option> get_global_options() {
     Option("xio_max_send_inline", Option::TYPE_SIZE, Option::LEVEL_ADVANCED)
     .set_default(512)
     .set_description(""),
+     
+    // Compaction
+     Option("compaction_enabled", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+     .set_default(true)
+     .set_description("Enable KPS compaction support for compression if available"),
+
+     Option("compaction_opt_space_enabled", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+       .set_default(true)
+       .set_flag(Option::FLAG_CREATE)
+       .set_description("Optimal space allocation for KPS compaction"),
+
+     Option("compaction_deferred_write", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+       .set_default(false)
+       .set_description("Deferred write path for compaction IO"),
+
+     Option("bluestore_compaction_min_alloc_size_hdd", Option::TYPE_SIZE, Option::LEVEL_ADVANCED)
+       .set_default(4_K)
+       .set_flag(Option::FLAG_CREATE)
+       .set_description("Default hdd min_alloc_size value for compaction model"),
+
+     Option("bluestore_compaction_min_alloc_size_ssd", Option::TYPE_SIZE, Option::LEVEL_ADVANCED)
+       .set_default(4_K)
+       .set_flag(Option::FLAG_CREATE)
+       .set_description("Default ssd min_alloc_size value for compaction model"),
+
+     Option("bluestore_compaction_min_blob_size_hdd", Option::TYPE_SIZE, Option::LEVEL_ADVANCED)
+       .set_default(128_K)// raw 128_K
+       .set_flag(Option::FLAG_RUNTIME)
+       .set_description("Default value of bluestore_compaction_min_blob_size for rotational media"),
+
+     Option("bluestore_compaction_min_blob_size_ssd", Option::TYPE_SIZE, Option::LEVEL_ADVANCED)
+       .set_default(8_K)
+       .set_flag(Option::FLAG_RUNTIME)
+       .set_description("Default value of bluestore_compaction_min_blob_size for non_rotational (solid state) media"),
+
+
+
 
     // Compressor
     Option("compressor_zlib_isal", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
@@ -4350,7 +4387,8 @@ std::vector<Option> get_global_options() {
     .set_description(""),
 
     Option("bluefs_allocator", Option::TYPE_STR, Option::LEVEL_DEV)
-    .set_default("bitmap")
+    .set_default("hybrid")
+    .set_enum_allowed({"bitmap", "stupid", "avl", "hybrid"})
     .set_description(""),
 
     Option("bluefs_preextend_wal_files", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
@@ -4705,8 +4743,8 @@ std::vector<Option> get_global_options() {
     .set_description("Key value database to use for bluestore"),
 
     Option("bluestore_allocator", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_default("bitmap")
-    .set_enum_allowed({"bitmap", "stupid"})
+    .set_default("hybrid")
+    .set_enum_allowed({"bitmap", "stupid", "avl", "hybrid"})
     .set_description("Allocator policy")
     .set_long_description("Allocator to use for bluestore.  Stupid should only be used for testing."),
 
@@ -4929,6 +4967,20 @@ std::vector<Option> get_global_options() {
     Option("bluestore_log_collection_list_age", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(60)
     .set_description("log collection list operation if it's slower than this age (seconds)"),
+    
+    Option("bluestore_avl_alloc_bf_threshold", Option::TYPE_UINT, Option::LEVEL_DEV)
+      .set_default(131072)
+      .set_description(""),
+
+    Option("bluestore_avl_alloc_bf_free_pct", Option::TYPE_UINT, Option::LEVEL_DEV)
+      .set_default(4)
+      .set_description(""),
+    
+    Option("bluestore_hybrid_alloc_mem_cap", Option::TYPE_UINT, Option::LEVEL_DEV)
+      .set_default(64_M)
+      .set_description("Maximum RAM hybrid allocator should use before enabling bitmap supplement"),
+
+
 
     // -----------------------------------------
     // kstore

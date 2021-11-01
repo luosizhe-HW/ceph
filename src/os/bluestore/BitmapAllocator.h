@@ -30,6 +30,7 @@ public:
   void release(
     const interval_set<uint64_t>& release_set) override;
 
+  using Allocator::release;
   uint64_t get_free() override
   {
     return get_available();
@@ -37,7 +38,7 @@ public:
 
   void dump() override;
   void dump(std::function<void(uint64_t offset, uint64_t length)> notify) override;
-  double get_fragmentation(uint64_t) override
+  double get_fragmentation()
   {
     return _get_fragmentation();
   }

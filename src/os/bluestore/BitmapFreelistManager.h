@@ -13,6 +13,8 @@
 #include "include/buffer.h"
 #include "kv/KeyValueDB.h"
 
+int64_t ReuseCountClose(std::vector<std::int8_t> &count_number);
+
 class BitmapFreelistManager : public FreelistManager {
   std::string meta_prefix, bitmap_prefix;
   std::shared_ptr<KeyValueDB::MergeOperator> merge_op;
@@ -83,6 +85,25 @@ public:
     return bytes_per_block;
   }
 
+  //=================================================
+  //2 bit count version function
+  //1.kv save in db function
+  void onebit_xor(uint64_t offset, KeyValueDB::Transaction txn, uint64_t min_alloc_size) override;
+  //2.new bitmap create function
+  int onebit_bitmap_create(KeyValueDB *kvdb, uint64_t min_alloc_size) override;
+  //3.restart and check function
+  void onebit_check_bitmap(const PExtentVector& extents, bool compressed, uint64_t min_alloc_size) override;
+  //4.bit convert to num function
+  void convert_num() override;
+  //5.statis function
+  int64_t reuse_count() override;
+  //6.counting plus function
+  void plus_function(uint64_t offset, uint64_t min_alloc_size) override;
+  //7.counting minus function
+  void minus_function(uint64_t offset, uint64_t min_alloc_size) override;
+  //8.counting check function
+  int zero_check_function(uint64_t offset, uint64_t min_alloc_size) override;
+  //==============================================================
 };
 
 #endif

@@ -1568,6 +1568,22 @@ public:
     }
   };
 
+  struct compaction_op {
+    typedef enum {
+      OP_COMPACTION = 1,
+    } type_t;
+    uint64_t pattern = 0;
+
+    PExtentVector unaligned_extents;
+    bufferlist compaction_data;
+  };
+
+  struct compaction_transaction {
+    uint64_t seq = 0;
+    list<compaction_op> ops;
+    interval_set<uint64_t> released;
+  };
+
   struct TransContext final : public AioContext {
     MEMPOOL_CLASS_HELPERS();
 
@@ -1668,6 +1684,9 @@ public:
     uint64_t last_nid = 0;     ///< if non-zero, highest new nid we allocated
     uint64_t last_blobid = 0;  ///< if non-zero, highest new blobid we allocated
 
+    bool is_compaction = false;
+    compaction_transaction *compaction_txn = nullptr;
+
     explicit TransContext(CephContext* cct, Collection *c, OpSequencer *o,
 			  list<Context*> *on_commits)
       : ch(c),
@@ -1681,6 +1700,7 @@ public:
     }
     ~TransContext() {
       delete deferred_txn;
+      delete compaction_txn;
     }
 
     void write_onode(OnodeRef &o) {
@@ -1743,6 +1763,28 @@ public:
     }
   };
 
+  struct CompactionBatch final : public AioContext {
+    OpSequencer *osr;
+    struct compaction_io {
+      bufferlist bl;
+      uint64_t seq;
+    };
+    map<uint64_t, compaction_io> iomap;
+    IOContext ioc;
+    map<uint64_t, int> seq_bytes;
+
+    void _relocate(CephContext *cct, uint64_t offset, uint64_t length);
+    CompactionBatch(CephContext *cct, OpSequencer *osr)
+	    : osr(osr), ioc(cct, this) {}
+
+    void write_queue(CephContext *cct, uint64_t seq, uint64_t offset, uint64_t length,
+		    bufferlist::const_iterator& bl_batch);
+
+    void aio_finish(BlueStore *store) override {
+      store->_compaction_aio_finish(osr);
+    }
+  };
+
   class OpSequencer : public RefCountedObject {
   public:
     ceph::mutex qlock = ceph::make_mutex("BlueStore::OpSequencer::qlock");
@@ -1759,6 +1801,9 @@ public:
 
     DeferredBatch *deferred_running = nullptr;
     DeferredBatch *deferred_pending = nullptr;
+
+    CompactionBatch *compaction_running = nullptr;
+    CompactionBatch *compaction_pending = nullptr;
 
     BlueStore *store;
     coll_t cid;
@@ -1957,6 +2002,9 @@ private:
   int deferred_queue_size = 0;         ///< num txc's queued across all osrs
   atomic_int deferred_aggressive = {0}; ///< aggressive wakeup of kv thread
   Finisher deferred_finisher, finisher;
+
+  ceph::mutex compaction_lock = ceph::make_mutex("Bluestore::compaction_lock");
+  int compaction_queue_size = 0;
 
   KVSyncThread kv_sync_thread;
   ceph::mutex kv_lock = ceph::make_mutex("BlueStore::kv_lock");
@@ -2323,9 +2371,23 @@ private:
 
   bluestore_deferred_op_t *_get_deferred_op(TransContext *txc, OnodeRef o);
   void _deferred_queue(TransContext *txc);
+  compaction_op *_get_compaction_op(TransContext *txc, OnodeRef o);
+  void _compaction_queue(TransContext *txc);
 public:
   void deferred_try_submit();
 private:
+  void _compaction_block_usage(TransContext *txc, OnodeRef o, bluestore_pextent_t p);
+  void _compaction_block_release(TransContext *txc, OnodeRef o, bluestore_pextent_t e, uint64_t min_alloc_size);
+  void _compaction_submit_batch(TransContext *txc, OpSequencer *osr);
+  void _choose_compaction_write_pattern(
+		TransContext *txc,
+		OnodeRef o,
+		BlobRef b,
+		bufferlist& l,
+		uint64_t b_off,
+		bool is_deferred);
+  void _compaction_aio_finish(OpSequencer *osr);
+  
   void _deferred_submit_unlock(OpSequencer *osr);
   void _deferred_aio_finish(OpSequencer *osr);
   int _deferred_replay();
@@ -2828,6 +2890,8 @@ private:
       bool new_blob; ///< whether new blob was created
 
       bool compressed = false;
+      bool compacted = false;
+      bool compaction_deferred = false;
       bufferlist compressed_bl;
       size_t compressed_len = 0;
 
@@ -2888,6 +2952,13 @@ private:
       uint64_t loffs_end,
       uint64_t min_alloc_size);
   };
+
+  void _compaction_batch_padding(
+    TransContext *txc,
+    WriteContext *wctx,
+    uint64_t *need,
+    uint64_t *need_compaction,
+    uint64_t chunk_size);
 
   void _do_write_small(
     TransContext *txc,
@@ -3372,4 +3443,64 @@ private:
   fsck_interval misreferenced_extents;
 
 };
+
+typedef struct TagReadUsage {
+  bool isAio;
+  bool isSplit;
+  bool isContinuous;
+  uint64_t chunkSize;
+  uint64_t blobReadLength;
+  uint64_t pextentOffset;
+  uint64_t pextentLength;
+}TagReadUsage;
+
+typedef struct TagBlockUsage {
+  uint64_t currentOffset;
+  uint64_t baseOffset;
+  uint64_t endPos;
+  int64_t smallLength;
+  int64_t leftLength;
+}TagBlockUsage;
+
+typedef struct TagBlockRelease {
+  uint64_t baseOffset;
+  uint64_t releaseOffset;
+  uint64_t currentPos;
+  uint64_t endPos;
+  uint64_t chunkSize;
+  uint64_t forwardStep;
+  int64_t smallLength;
+  int64_t leftLength;
+}TagBlockRelease;
+
+void CompactionReadInit(uint64_t gol,
+	uint64_t feo,
+	uint64_t gcs,
+	bool aac,
+	TagReadUsage &read_param);
+
+void CompactionReadRegion(uint64_t pextent_offset,
+			     uint64_t pextent_length,
+			     uint64_t &blob_read_length,
+			     uint64_t chunk_size,
+			     bool is_compaction_switch_open);
+
+
+void CompactionBlockUsageInit(uint64_t pextent_offset,
+				 uint64_t pextent_length,
+				 uint64_t min_alloc_size,
+				 TagBlockUsage &param);
+
+
+void CompactionBlockUsageInternal(uint64_t mas,
+				     uint64_t po,
+				     TagBlockUsage &param);
+
+void CompactionBlockReleaseInit(uint64_t min_alloc_size,
+				   uint64_t pextent_offset,
+				   uint64_t pextent_length,
+				   TagBlockRelease &release_param);
+
+void CompactionBlockReleaseInternal(uint64_t pextent_offset,
+				       TagBlockRelease &release_param);
 #endif

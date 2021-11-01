@@ -827,6 +827,13 @@ void bluestore_blob_t::allocated(uint32_t b_off, uint32_t length, const PExtentV
   }
 }
 
+bool bluestore_blob_t::is_partial_allocation() {
+  if (extents.size() == 0) {
+    return false;
+  } else {
+    return true;
+  }
+}
 // cut it out of extents
 struct vecbuilder {
   PExtentVector v;
