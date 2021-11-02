@@ -629,7 +629,6 @@ void AllocatorLevel01Loose::dump(
     notify(off, len);
 }
 
-//==============================================
 uint64_t AllocatorLevel01Loose::_claim_free_to_left_l0(int64_t l0_pos_start)
 {
   int64_t d0 = L0_ENTRIES_PER_SLOT;
@@ -714,4 +713,3 @@ uint64_t AllocatorLevel01Loose::_claim_free_to_right_l0(int64_t l0_pos_start)
   }
   return pos;
 }
-//==============================================

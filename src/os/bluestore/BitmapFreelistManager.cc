@@ -310,16 +310,12 @@ bool BitmapFreelistManager::enumerate_next(KeyValueDB *kvdb, uint64_t *offset, u
       break;
     }
     string k = enumerate_p->key();
-    dout(30) << "==k==:" << k << "k length:" << k.length() << dendl;
-    //================================================================
     int flag = 0; 
     while(k.length()==10)
     {
-      dout(30) << "01." << dendl;
       enumerate_p->next();
       enumerate_bl.clear();
       if (!enumerate_p->valid()){
-        dout(30) << "02." << dendl;
         enumerate_offset += bytes_per_key;
         enumerate_bl_pos = 0;
         *offset = _get_offset(enumerate_offset, enumerate_bl_pos);
@@ -327,20 +323,17 @@ bool BitmapFreelistManager::enumerate_next(KeyValueDB *kvdb, uint64_t *offset, u
         break;
       }
       else{
-        dout(30) << "03." << dendl;
         k = enumerate_p->key();
         if(k.length()==10)
           continue;
         else{
-          dout(30) << "04." << dendl;
           flag = 2;
           break;
         }
       }
     }
-    if(flag==1)
+    if(flag == 1)
       break;
-    //===========================================================
     const char *p = k.c_str();
     uint64_t next = enumerate_offset + bytes_per_key;
     _key_decode_u64(p, &enumerate_offset);
@@ -379,34 +372,28 @@ bool BitmapFreelistManager::enumerate_next(KeyValueDB *kvdb, uint64_t *offset, u
 	break;
       }
       string k = enumerate_p->key();
-      //===================================================================
       int flag = 0;
-      while(k.length()==10)
+      while(k.length() == 10)
       {
-        dout(30) << "001." << dendl;
         enumerate_p->next();
         enumerate_bl.clear();
         enumerate_bl_pos = 0;
         if(!enumerate_p->valid()){
-          dout(30) << "002." << dendl;
           flag = 1;
           break;
         }
         else{
-          dout(30) << "003." << dendl;
           k = enumerate_p->key();
-          if(k.length()==10)
+          if(k.length() == 10)
             continue;
           else{
-            dout(30) << "004." << dendl;
-            flag=2;
+            flag = 2;
             break;
           }
         }
       }
-      if(flag==1)
+      if(flag == 1)
         break;
-      //========================================================
 
       const char *p = k.c_str();
       _key_decode_u64(p, &enumerate_offset);
@@ -658,33 +645,13 @@ void BitmapFreelistManager::_xor(
   }
 }
 
-//=====================================================================
-//=====================================================================
-
-/*******************************************************
- * function name: onebit_xor
- * function:save new bitmap as key-value into db
- * input: offset of pextent, count, txn
- * output: None
- * return: None
- * ****************************************************/
 void BitmapFreelistManager::onebit_xor(uint64_t offset, KeyValueDB::Transaction txn, uint64_t min_alloc_size){
   std::lock_guard l(lock);
-  dout(30) << __func__ << "====onebit_xor start. offset: " << offset << "=====" << dendl;
   //1.prepare parameter
   uint64_t chunk_size = min_alloc_size;
   uint64_t chunk_num = blocks_per_key;
   uint64_t base_offset = offset;
 
-  //print and check
- // uint64_t chunk_index = offset / chunk_size / chunk_num;
- // uint64_t chunk_index_detail = ((offset / chunk_size) % chunk_num) / 8;
- // uint64_t chunk_index_detail_detail = ((offset / chunk_size) % chunk_num) % 8;
- // uint64_t index_offset = chunk_index_detail_detail;
-
- // unsigned int state_one = (0x01) & (bit_array_one[chunk_index][chunk_index_detail] >> index_offset);
- // unsigned int state_two = (0x01) & (bit_array_two[chunk_index][chunk_idnex_detail] >> index_offset);
- // dout(30) << __func__ << " before state_one: " << state_one << ", state_two: " << state_two << ", " << offset << dendl;
   //2.locate the index of target offset
   uint64_t base_number = base_offset / (chunk_num*chunk_size);
   dout(30) << __func__ << " base_offset: " << base_offset << ", base_number: " << base_number << dendl;
@@ -712,13 +679,6 @@ void BitmapFreelistManager::onebit_xor(uint64_t offset, KeyValueDB::Transaction 
   dout(30) << __func__ << "=====onebit_xor finish.=====" << dendl;
 }
 
-/**************************************************
- * function name: onebit_bitmap_create
- * function: create new bitmap during restart
- * input: pointer of kvdb
- * output: None
- * return: None
- * **********************************************/
 int BitmapFreelistManager::onebit_bitmap_create(KeyValueDB *kvdb, uint64_t min_alloc_size){
   std::lock_guard l(lock);
   
@@ -739,21 +699,19 @@ int BitmapFreelistManager::onebit_bitmap_create(KeyValueDB *kvdb, uint64_t min_a
   dout(30) << __func__ << " whole_block_size: " << whole_block_size << ", index_size: " << index_size << dendl;
 
   //1.firstly, get the pointer of kvdb
-  dout(30) << __func__ << " ====let's create onebit_bitmap for counting reuse pextents.====" << dendl;
   enumerate_p = kvdb->get_iterator(bitmap_prefix);
   enumerate_p->lower_bound(string());
 
   //2.create new bitmap
   while(enumerate_p->valid()){
     string k = enumerate_p->key();
-    dout(30) << "====key size: " << k.size() << ", k: " << k << dendl;
+    dout(30) << "key size: " << k.size() << ", k: " << k << dendl;
 
     if(k.length() == 10){
       //2.1 read and convert key
       const char *p = k.c_str();
       uint64_t my_offset;
       p = _key_decode_u64_new(p, &my_offset);
-      dout(30) << "====1.my_offset: " << my_offset << dendl;
 
       //2.2 then get value according to key, and build as count_array in memory
       enumerate_bl = enumerate_p->value();
@@ -763,14 +721,10 @@ int BitmapFreelistManager::onebit_bitmap_create(KeyValueDB *kvdb, uint64_t min_a
       for(int i = 0; i < 32; i++){
         segment_value[i] = segment_p[i];
       }
-      dout(30) << "===2.segment_value:" << segment_value << ", segment_value length:" << segment_value.length() << dendl;
 
       uint64_t array_pos = my_offset / min_alloc_size / blocks_per_key;
       bit_array_one[array_pos] = segment_value.substr(0,16);
       bit_array_two[array_pos] = segment_value.substr(16);
-      dout(30) << __func__ << " my_offset:" << my_offset << ", array_pos:" << array_pos
-               << ", bit_array_one:" << bit_array_one[array_pos]
-               << ", bit_array_two:" << bit_array_two[array_pos] << dendl;
     }
 
     //3.prepare for next kv
@@ -778,18 +732,9 @@ int BitmapFreelistManager::onebit_bitmap_create(KeyValueDB *kvdb, uint64_t min_a
     if(!enumerate_p->valid())
       break;
   }
-  dout(30) << __func__ << "====onebit_bitmap has already created.====" << dendl;
-  dout(30) << __func__ << "reuse_count: " << reuse_count() << dendl;
   return 0;
 }
 
-/***********************************************************
- * fucntion name: onebit_check_bitmap
- * function: check during restart
- * input: extents, compressed, min_alloc_size
- * output: None
- * return: None
- * *********************************************************/
 void BitmapFreelistManager::onebit_check_bitmap(const PExtentVector& extents, bool compressed, uint64_t min_alloc_size){
   if(compressed){
     dout(30) << __func__ << " extents.size: " << extents.size() << dendl;
@@ -809,9 +754,6 @@ void BitmapFreelistManager::onebit_check_bitmap(const PExtentVector& extents, bo
        if(pos_index < count_number.size()){
          dout(30) << __func__ << "1.num before check: " << int(count_number[pos_index]) << dendl;
          count_number[pos_index]--;
-         if(count_number[pos_index] < 0){
-           dout(30) << "ERROR!" << dendl;
-         }
        }
        else{
          dout(30) << __func__ << "offset is not reused." << dendl;
@@ -825,9 +767,6 @@ void BitmapFreelistManager::onebit_check_bitmap(const PExtentVector& extents, bo
          if(pos_index < count_number.size()){
            dout(30) << __func__ << "2.num before check: " << int(count_number[pos_index]) << ", offset: " << temp_offset << dendl;
            count_number[pos_index]--;
-           if(count_number[pos_index] < 0){
-             dout(30) << "ERROR!" << dendl;
-           }
            temp_offset += chunk_size;
          }
          else{
@@ -839,13 +778,6 @@ void BitmapFreelistManager::onebit_check_bitmap(const PExtentVector& extents, bo
   }
 }
 
-/*********************************************************
- * function name: convert_num
- * function: from bit to num
- * input: None
- * output: None
- * return: None
- * ******************************************************/
 void BitmapFreelistManager::convert_num(){
   uint64_t index_count = bit_array_one.size();
   for (uint64_t i = 0; i < index_count; i++) {
@@ -861,24 +793,10 @@ void BitmapFreelistManager::convert_num(){
   dout(30) << __func__ << " count array has already be created. number: " << count_number.size() << dendl;
 }
 
-/********************************************************
- * function name: reuse_count
- * function: check during restart
- * input: None
- * output: None
- * return: None
- * *****************************************************/
 int64_t BitmapFreelistManager::reuse_count(){
   return ReuseCountClose(count_number);
 }
 
-/*******************************************************
- * function name: plus_function
- * function: count++
- * input: offset
- * output: None
- * return None
- * ***************************************************/
 void BitmapFreelistManager::plus_function(uint64_t offset, uint64_t min_alloc_size){
   std::lock_guard l(lock);
   if (min_alloc_size == 0 || blocks_per_key == 0) {
@@ -908,13 +826,6 @@ void BitmapFreelistManager::plus_function(uint64_t offset, uint64_t min_alloc_si
   state_two = (0x01) & (bit_array_two[chunk_index][chunk_index_detail] >> index_offset);
 }
 
-/**************************************************************
- * function name: minus_function
- * function: count--
- * input: offset
- * output: None
- * return: None
- * **********************************************************/
 void BitmapFreelistManager::minus_function(uint64_t offset, uint64_t min_alloc_size){
   std::lock_guard l(lock);
   if (min_alloc_size == 0 || blocks_per_key == 0) {
@@ -944,13 +855,6 @@ void BitmapFreelistManager::minus_function(uint64_t offset, uint64_t min_alloc_s
   state_two = (0x01) & (bit_array_two[chunk_index][chunk_index_detail] >> index_offset);
 }
 
-/*******************************************************
- * function name: zero_check_function
- * function: count check
- * input: offset, min_alloc_size
- * output: None
- * return: 0 if count=0, 1 if count !=0
- * ***************************************************/
 int BitmapFreelistManager::zero_check_function(uint64_t offset, uint64_t min_alloc_size){
   if (min_alloc_size == 0 || blocks_per_key == 0) {
     derr << __func__ << " unrecognized min_alloc_size or blocks_per_key " << dendl;  

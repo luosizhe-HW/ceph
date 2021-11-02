@@ -4,7 +4,6 @@
 #pragma once
 
 #include <mutex>
-
 #include "AvlAllocator.h"
 #include "BitmapAllocator.h"
 

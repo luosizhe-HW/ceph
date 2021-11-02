@@ -94,7 +94,6 @@ OPTION(xio_max_conns_per_portal, OPT_INT) // max xio_connections per portal/ctx
 OPTION(xio_transport_type, OPT_STR) // xio transport type: {rdma or tcp}
 OPTION(xio_max_send_inline, OPT_INT) // xio maximum threshold to send inline
 
-// compaction
 OPTION(compaction_enabled, OPT_BOOL)
 OPTION(compaction_opt_space_enabled, OPT_BOOL)
 OPTION(compaction_deferred_write, OPT_BOOL)

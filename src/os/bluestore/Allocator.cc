@@ -99,11 +99,10 @@ Allocator::~Allocator()
   delete asok_hook;
 }
 
-//===============================
 const string& Allocator::get_name() const{
     return asok_hook->name;
 }
-//===============================
+
 Allocator *Allocator::create(CephContext* cct, string type,
                              int64_t size, int64_t block_size, const std::string& name)
 {
@@ -112,15 +111,12 @@ Allocator *Allocator::create(CephContext* cct, string type,
     alloc = new StupidAllocator(cct, name);
   } else if (type == "bitmap") {
     alloc = new BitmapAllocator(cct, size, block_size, name);
-  }
-  //==========================================
-  else if (type == "avl"){
+  } else if (type == "avl"){
      return new AvlAllocator(cct, size, block_size, name);
-  }
-  else if (type == "hybrid"){
+  } else if (type == "hybrid"){
      return new HybridAllocator(cct, size, block_size, cct->_conf.get_val<uint64_t>("bluestore_hybrid_alloc_mem_cap"), name);
   }
-  //==========================================
+
   if (alloc == nullptr) {
     lderr(cct) << "Allocator::" << __func__ << " unknown alloc type "
 	     << type << dendl;

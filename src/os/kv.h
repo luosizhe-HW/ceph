@@ -73,7 +73,6 @@ inline static const char *_key_decode_u64(const char *key, uint64_t *pu) {
   return key + 8;
 }
 
-//==================================
 template<typename T>
 inline static void _key_encode_u64_new(uint64_t u, T *key){
 	key->append((char*)&u, 8);
@@ -86,5 +85,5 @@ inline static const char* _key_decode_u64_new(const char *key, uint64_t *pu){
 	*pu = bu;
 	return key+10;
 }
-//=================================
+
 #endif

@@ -2,9 +2,7 @@
 // vim: ts=8 sw=2 smarttab
 
 #include "HybridAllocator.h"
-
 #include <limits>
-
 #include "common/config_proxy.h"
 #include "common/debug.h"
 

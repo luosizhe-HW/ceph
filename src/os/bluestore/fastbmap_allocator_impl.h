@@ -144,9 +144,7 @@ class AllocatorLevel01Loose : public AllocatorLevel01
     CHILD_PER_SLOT = bits_per_slot / L1_ENTRY_WIDTH, // 32
     L1_ENTRIES_PER_SLOT = bits_per_slot / L1_ENTRY_WIDTH, //32
     CHILD_PER_SLOT_L0 = bits_per_slot, // 64
-    //================================================
     L0_ENTRIES_PER_SLOT = bits_per_slot, //64
-    //================================================
   };
   uint64_t _children_per_slot() const override
   {
@@ -328,12 +326,8 @@ protected:
   void _mark_l1_on_l0(int64_t l0_pos, int64_t l0_pos_end);
   void _mark_alloc_l0(int64_t l0_pos_start, int64_t l0_pos_end);
 
-  
-//================================================
   uint64_t _claim_free_to_left_l0(int64_t l0_pos_start);
   uint64_t _claim_free_to_right_l0(int64_t l0_pos_start);
-//================================================
-
 
   void _mark_alloc_l1_l0(int64_t l0_pos_start, int64_t l0_pos_end)
   {
@@ -436,7 +430,6 @@ protected:
     return l0_granularity * (l0_pos_end - l0_pos_start);
   }
 
-//================================================
   uint64_t claim_free_to_left_l1(uint64_t offs)
   {
     uint64_t l0_pos_end = offs / l0_granularity;
@@ -462,9 +455,6 @@ protected:
     }
     return 0;
   }
-//================================================
-
-
 
 public:
   uint64_t debug_get_allocated(uint64_t pos0 = 0, uint64_t pos1 = 0)
@@ -565,7 +555,6 @@ public:
       l1.collect_stats(bins_overall);
   }
 
-//================================================
   uint64_t claim_free_to_left(uint64_t offset) {
     std::lock_guard l(lock);
     auto allocated = l1.claim_free_to_left_l1(offset);
@@ -592,7 +581,6 @@ public:
     _mark_l2_on_l1(l2_pos, l2_pos_end);
     return allocated;
   }
-//================================================
  
  protected:
    ceph::mutex lock = ceph::make_mutex("AllocatorLevel02::lock");
