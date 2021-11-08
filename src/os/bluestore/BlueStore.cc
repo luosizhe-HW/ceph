@@ -9210,7 +9210,7 @@ int BlueStore::_do_read(
           int r;
           // use aio if there are more regions to read than those in this blob
           if (num_regions > r2r.size() && read_param.isContinuous) {
-            r = bdev->read(offset, length, &temp_bl, &ioc, false);
+            r = bdev->aio_read(offset, length, &temp_bl, &ioc);
             if (!read_param.isSplit) {
               temp_bl.splice(read_param.pextentOffset % read_param.chunkSize,
                             bptr->get_blob().get_ondisk_length(), &bl);
