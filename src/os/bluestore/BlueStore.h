@@ -47,6 +47,8 @@
 #include "BlueFS.h"
 #include "common/EventTrace.h"
 
+#include "kps_compaction.h"
+
 class Allocator;
 class FreelistManager;
 class BlueStoreRepairer;
@@ -3444,63 +3446,4 @@ private:
 
 };
 
-typedef struct TagReadUsage {
-  bool isAio;
-  bool isSplit;
-  bool isContinuous;
-  uint64_t chunkSize;
-  uint64_t blobReadLength;
-  uint64_t pextentOffset;
-  uint64_t pextentLength;
-}TagReadUsage;
-
-typedef struct TagBlockUsage {
-  uint64_t currentOffset;
-  uint64_t baseOffset;
-  uint64_t endPos;
-  int64_t smallLength;
-  int64_t leftLength;
-}TagBlockUsage;
-
-typedef struct TagBlockRelease {
-  uint64_t baseOffset;
-  uint64_t releaseOffset;
-  uint64_t currentPos;
-  uint64_t endPos;
-  uint64_t chunkSize;
-  uint64_t forwardStep;
-  int64_t smallLength;
-  int64_t leftLength;
-}TagBlockRelease;
-
-void CompactionReadInit(uint64_t gol,
-	uint64_t feo,
-	uint64_t gcs,
-	bool aac,
-	TagReadUsage &read_param);
-
-void CompactionReadRegion(uint64_t pextent_offset,
-			     uint64_t pextent_length,
-			     uint64_t &blob_read_length,
-			     uint64_t chunk_size,
-			     bool is_compaction_switch_open);
-
-
-void CompactionBlockUsageInit(uint64_t pextent_offset,
-				 uint64_t pextent_length,
-				 uint64_t min_alloc_size,
-				 TagBlockUsage &param);
-
-
-void CompactionBlockUsageInternal(uint64_t mas,
-				     uint64_t po,
-				     TagBlockUsage &param);
-
-void CompactionBlockReleaseInit(uint64_t min_alloc_size,
-				   uint64_t pextent_offset,
-				   uint64_t pextent_length,
-				   TagBlockRelease &release_param);
-
-void CompactionBlockReleaseInternal(uint64_t pextent_offset,
-				       TagBlockRelease &release_param);
 #endif

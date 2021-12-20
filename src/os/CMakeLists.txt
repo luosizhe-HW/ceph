@@ -34,9 +34,6 @@ if(WITH_BLUESTORE)
     bluestore/BitmapAllocator.cc
     bluestore/AvlAllocator.cc
     bluestore/HybridAllocator.cc
-    bluestore/NewCountBitmap.cpp.o
-    bluestore/kps_compaction.cpp.o
-    bluestore/log_s.cpp.o
   )
 endif(WITH_BLUESTORE)
 
@@ -122,6 +119,7 @@ if(WITH_BLUESTORE)
     bluestore/bluestore_tool.cc)
   target_link_libraries(ceph-bluestore-tool
     os global)
+  target_link_libraries(os heap_profiler kv kps_compaction)
   install(TARGETS ceph-bluestore-tool
     DESTINATION bin)
 endif()

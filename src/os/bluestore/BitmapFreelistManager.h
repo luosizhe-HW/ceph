@@ -5,6 +5,7 @@
 #define CEPH_OS_BLUESTORE_BITMAPFREELISTMANAGER_H
 
 #include "FreelistManager.h"
+#include "kps_compaction.h"
 
 #include <string>
 #include <mutex>
@@ -13,7 +14,6 @@
 #include "include/buffer.h"
 #include "kv/KeyValueDB.h"
 
-int64_t ReuseCountClose(std::vector<std::int8_t> &count_number);
 
 class BitmapFreelistManager : public FreelistManager {
   std::string meta_prefix, bitmap_prefix;
