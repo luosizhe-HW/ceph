@@ -812,7 +812,7 @@ std::vector<Option> get_global_options() {
      .set_default(true)
      .set_description("Enable KPS compaction support for compression if available"),
 
-     Option("bluestore_min_compaction_enable", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)i
+     Option("bluestore_min_compaction_enable", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
      .set_default(false)
      .set_flag(Option::FLAG_CREATE)
      .set_description(""),

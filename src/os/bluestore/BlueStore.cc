@@ -13263,7 +13263,7 @@ void BlueStore::_wctx_finish(
         txc->released.insert(e.offset, e.length);
         txc->statfs_delta.allocated() -= e.length;
       } else if (min_compaction_enable && blob.is_compressed()) {
-        txc->statfs_delta.compressed_allocated() -= e.length();
+        txc->statfs_delta.compressed_allocated() -= e.length;
       } else {
         _compaction_block_release(txc, o, e, min_alloc_size);
       }
