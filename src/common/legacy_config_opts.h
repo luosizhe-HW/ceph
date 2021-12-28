@@ -95,6 +95,7 @@ OPTION(xio_transport_type, OPT_STR) // xio transport type: {rdma or tcp}
 OPTION(xio_max_send_inline, OPT_INT) // xio maximum threshold to send inline
 
 OPTION(compaction_enabled, OPT_BOOL)
+OPTION(bluestore_min_compaction_enable, OPT_BOOL)
 OPTION(compaction_opt_space_enabled, OPT_BOOL)
 OPTION(compaction_deferred_write, OPT_BOOL)
 OPTION(bluestore_compaction_min_alloc_size_hdd, OPT_U32)

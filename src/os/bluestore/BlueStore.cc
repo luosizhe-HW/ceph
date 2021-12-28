@@ -13210,6 +13210,7 @@ void BlueStore::_wctx_finish(
   WriteContext *wctx,
   set<SharedBlob*> *maybe_unshared_blobs)
 {
+  bool min_compaction_enable = cct->_conf->bluestore_min_compaction_enable;
   auto oep = wctx->old_extents.begin();
   while (oep != wctx->old_extents.end()) {
     auto &lo = *oep;
@@ -13261,6 +13262,8 @@ void BlueStore::_wctx_finish(
       if (!blob.is_compressed()) {
         txc->released.insert(e.offset, e.length);
         txc->statfs_delta.allocated() -= e.length;
+      } else if (min_compaction_enable && blob.is_compressed()) {
+        txc->statfs_delta.compressed_allocated() -= e.length();
       } else {
         _compaction_block_release(txc, o, e, min_alloc_size);
       }

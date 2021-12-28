@@ -812,6 +812,11 @@ std::vector<Option> get_global_options() {
      .set_default(true)
      .set_description("Enable KPS compaction support for compression if available"),
 
+     Option("bluestore_min_compaction_enable", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)i
+     .set_default(false)
+     .set_flag(Option::FLAG_CREATE)
+     .set_description(""),
+
      Option("compaction_opt_space_enabled", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
        .set_default(true)
        .set_flag(Option::FLAG_CREATE)
@@ -819,6 +824,7 @@ std::vector<Option> get_global_options() {
 
      Option("compaction_deferred_write", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
        .set_default(false)
+       .set_flag(Option::FLAG_RUNTIME)
        .set_description("Deferred write path for compaction IO"),
 
      Option("bluestore_compaction_min_alloc_size_hdd", Option::TYPE_SIZE, Option::LEVEL_ADVANCED)
