@@ -1,0 +1,1259 @@
+diff --git a/src/common/legacy_config_opts.h b/src/common/legacy_config_opts.h
+index 7aae31e8..9daf58ae 100644
+--- a/src/common/legacy_config_opts.h
++++ b/src/common/legacy_config_opts.h
+@@ -97,6 +97,9 @@ OPTION(xio_max_send_inline, OPT_INT) // xio maximum threshold to send inline
+ OPTION(compressor_zlib_isal, OPT_BOOL)
+ OPTION(compressor_zlib_level, OPT_INT) //regular zlib compression level, not applicable to isa-l optimized version
+ 
++OPTION(compressor_zlib_winsize, OPT_INT)
++OPTION(compressor_glz_level, OPT_INT)
++
+ OPTION(qat_compressor_enabled, OPT_BOOL)
+ 
+ OPTION(plugin_crypto_accelerator, OPT_STR)
+@@ -662,6 +665,13 @@ OPTION(osd_ignore_stale_divergent_priors, OPT_BOOL) // do not assert on divergen
+ // If set to true even after reading enough shards to
+ // decode the object, any error will be reported.
+ OPTION(osd_read_ec_check_for_errors, OPT_BOOL) // return error if any ec shard has an error
++OPTION(osd_ec_partial_read, OPT_BOOL) // enable ec partial read
++OPTION(osd_ec_partial_write, OPT_BOOL) // enable ec partial write
++OPTION(osd_ec_partial_update, OPT_BOOL) 
++OPTION(osd_ec_zero_opt, OPT_BOOL) // enable ec rgw zero optimization
++OPTION(kpsec_log_fullpath, OPT_STR) //The path to store KPS_EC log
++OPTION(kpsec_log_level, OPT_STR) // The level of kpsec_log
++OPTION(kpsec_log_memlogsize, OPT_U64) // kpsec_memlog_size
+ 
+ // Only use clone_overlap for recovery if there are fewer than
+ // osd_recover_clone_overlap_limit entries in the overlap set
+@@ -1042,6 +1052,7 @@ OPTION(bluestore_allocator, OPT_STR)     // stupid | bitmap
+ OPTION(bluestore_freelist_blocks_per_key, OPT_INT)
+ OPTION(bluestore_bitmapallocator_blocks_per_zone, OPT_INT) // must be power of 2 aligned, e.g., 512, 1024, 2048...
+ OPTION(bluestore_bitmapallocator_span_size, OPT_INT) // must be power of 2 aligned, e.g., 512, 1024, 2048...
++OPTION(bluestore_kpsallocator_enable, OPT_BOOL) // enable bluestore kps allocator
+ OPTION(bluestore_max_deferred_txc, OPT_U64)
+ OPTION(bluestore_rocksdb_options, OPT_STR)
+ OPTION(bluestore_fsck_on_mount, OPT_BOOL)
+diff --git a/src/common/options.cc b/src/common/options.cc
+index 8135ea8f..762ab8af 100644
+--- a/src/common/options.cc
++++ b/src/common/options.cc
+@@ -816,6 +816,16 @@ std::vector<Option> get_global_options() {
+     .set_default(5)
+     .set_description("Zlib compression level to use"),
+ 
++    Option("compressor_zlib_winsize", Option::TYPE_INT, Option::LEVEL_ADVANCED)
++    .set_default(-15)
++    .set_min_max(-15,32)
++    .set_description("Zlib compression winsize to use"),
++
++    Option("compressor_glz_level", Option::TYPE_INT, Option::LEVEL_ADVANCED)
++    .set_default(0)
++    .set_min_max(0,1)
++    .set_description("glz compression winsize to use"),
++
+     Option("qat_compressor_enabled", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+     .set_default(false)
+     .set_description("Enable Intel QAT acceleration support for compression if available"),
+@@ -3293,6 +3303,38 @@ std::vector<Option> get_global_options() {
+     .set_default(false)
+     .set_description(""),
+ 
++    Option("osd_ec_partial_read", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
++    .set_default(true)
++    .set_description("Try to read necessary chunks instead of all chunks in a stripe in ECBackend."
++		     "This option helps to reduce IO and network operation and improve read performance"),
++
++    Option("osd_ec_partial_write", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
++    .set_default(true)
++    .set_description("Try to read and write partial chunks instead of a complete stripe in erasure code data pool."
++		     "This option helps to reduce IO and network operation and improve write performance"),
++
++    Option("osd_ec_partial_update", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
++    .set_default(true)
++    .set_description("Try to read and write partial chunks instead of a complete stripe in erasure code data pool."
++		     "This option helps to reduce IO and network operation and improve write performance."
++		     "Only bluestore and setting ec plugin to isa support this feature for now."),
++
++    Option("osd_ec_zero_opt", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
++    .set_default(true)
++    .set_description("When creating a small RGW object, do not allocate actual disk space to zero part."
++		     "And record only metadata to save storage space"),
++    Option("kpsec_log_fullpath", Option::TYPE_STR, Option::LEVEL_ADVANCED)
++    .set_default("/var/log/ceph/")
++    .set_description("The path to store KPS_EC log, the default is /var/log/ceph/"),
++
++    Option("kpsec_log_level", Option::TYPE_STR, Option::LEVEL_ADVANCED)
++    .set_default("critical/debug")
++    .set_description("The level of kpsec_log, the default is critical/debug"),
++
++    Option("kpsec_log_memlogsize", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
++    .set_default(100)
++    .set_description("Kpsec_memlog_size,it is the size of memlog_ringbuffer, the default is 100"),
++
+     Option("osd_recover_clone_overlap_limit", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+     .set_default(10)
+     .set_description(""),
+@@ -4547,7 +4589,7 @@ std::vector<Option> get_global_options() {
+ 
+     Option("bluestore_compression_algorithm", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+     .set_default("snappy")
+-    .set_enum_allowed({"", "snappy", "zlib", "zstd", "lz4"})
++    .set_enum_allowed({"", "snappy", "zlib", "zstd", "lz4", "glz"})
+     .set_flag(Option::FLAG_RUNTIME)
+     .set_description("Default compression algorithm to use when writing object data")
+     .set_long_description("This controls the default compressor to use (if any) if the per-pool property is not set.  Note that zstd is *not* recommended for bluestore due to high CPU overhead when compressing small amounts of data."),
+@@ -4722,6 +4764,10 @@ std::vector<Option> get_global_options() {
+     .set_default(1024)
+     .set_description(""),
+ 
++    Option("bluestore_kpsallocator_enable", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
++    .set_default(true)
++    .set_description("Enable KPS Allocator"),
++
+     Option("bluestore_max_deferred_txc", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+     .set_default(32)
+     .set_description("Max transactions with deferred writes that can accumulate before we force flush deferred writes"),
+diff --git a/src/compressor/CMakeLists.txt b/src/compressor/CMakeLists.txt
+index 494bcc44..b2e9a6c4 100644
+--- a/src/compressor/CMakeLists.txt
++++ b/src/compressor/CMakeLists.txt
+@@ -22,6 +22,8 @@ if(HAVE_BROTLI)
+   add_subdirectory(brotli)
+ endif()
+ 
++add_subdirectory(glz)
++
+ set(ceph_compressor_libs
+     ceph_snappy
+     ceph_zlib
+@@ -35,5 +37,7 @@ if(HAVE_BROTLI)
+   list(APPEND ceph_compressor_libs ceph_brotli)
+ endif()
+ 
++list(APPEND ceph_compressor_libs ceph_glz)
++
+ add_custom_target(compressor_plugins DEPENDS
+     ${ceph_compressor_libs})
+diff --git a/src/compressor/Compressor.h b/src/compressor/Compressor.h
+index a696521a..36b2ceae 100644
+--- a/src/compressor/Compressor.h
++++ b/src/compressor/Compressor.h
+@@ -43,6 +43,7 @@ public:
+ #ifdef HAVE_BROTLI
+     COMP_ALG_BROTLI = 5,
+ #endif
++    COMP_ALG_GLZ = 6,
+     COMP_ALG_LAST   //the last value for range checks
+   };
+ 
+@@ -58,6 +59,8 @@ public:
+ #ifdef HAVE_BROTLI
+ 	{ "brotli",	COMP_ALG_BROTLI },
+ #endif
++  { "glz", COMP_ALG_GLZ },
++
+   };
+ 
+   // compression options
+@@ -88,11 +91,11 @@ public:
+   CompressionAlgorithm get_type() const {
+     return alg;
+   }
+-  virtual int compress(const ceph::bufferlist &in, ceph::bufferlist &out) = 0;
+-  virtual int decompress(const ceph::bufferlist &in, ceph::bufferlist &out) = 0;
++  virtual int compress(const ceph::bufferlist &in, ceph::bufferlist &out, boost::optional<int32_t> &compressor_message) = 0;
++  virtual int decompress(const ceph::bufferlist &in, ceph::bufferlist &out, boost::optional<int32_t> compressor_message) = 0;
+   // this is a bit weird but we need non-const iterator to be in
+   // alignment with decode methods
+-  virtual int decompress(ceph::bufferlist::const_iterator &p, size_t compressed_len, ceph::bufferlist &out) = 0;
++  virtual int decompress(ceph::bufferlist::const_iterator &p, size_t compressed_len, ceph::bufferlist &out, boost::optional<int32_t> compressor_message) = 0;
+ 
+   static CompressorRef create(CephContext *cct, const std::string &type);
+   static CompressorRef create(CephContext *cct, int alg);
+diff --git a/src/compressor/QatAccel.cc b/src/compressor/QatAccel.cc
+index 7836243b..7b3436b8 100644
+--- a/src/compressor/QatAccel.cc
++++ b/src/compressor/QatAccel.cc
+@@ -59,7 +59,7 @@ bool QatAccel::init(const std::string &alg) {
+   return true;
+ }
+ 
+-int QatAccel::compress(const bufferlist &in, bufferlist &out) {
++int QatAccel::compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message) {
+   for (auto &i : in.buffers()) {
+     const unsigned char* c_in = (unsigned char*) i.c_str();
+     unsigned int len = i.length();
+@@ -75,14 +75,15 @@ int QatAccel::compress(const bufferlist &in, bufferlist &out) {
+   return 0;
+ }
+ 
+-int QatAccel::decompress(const bufferlist &in, bufferlist &out) {
++int QatAccel::decompress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> compressor_message) {
+   auto i = in.begin();
+-  return decompress(i, in.length(), out);
++  return decompress(i, in.length(), out, compressor_message);
+ }
+ 
+ int QatAccel::decompress(bufferlist::const_iterator &p,
+ 		 size_t compressed_len,
+-		 bufferlist &dst) {
++		 bufferlist &dst,
++		 boost::optional<int32_t> &compressor_message) {
+   unsigned int ratio_idx = 0;
+   bool read_more = false;
+   bool joint = false;
+diff --git a/src/compressor/QatAccel.h b/src/compressor/QatAccel.h
+index 295b180e..f15e3303 100644
+--- a/src/compressor/QatAccel.h
++++ b/src/compressor/QatAccel.h
+@@ -27,9 +27,9 @@ class QatAccel {
+ 
+   bool init(const std::string &alg);
+ 
+-  int compress(const bufferlist &in, bufferlist &out);
+-  int decompress(const bufferlist &in, bufferlist &out);
+-  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &dst);
++  int compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message);
++  int decompress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> compressor_message);
++  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &dst, boost::optional<int32_t> compressor_message);
+ };
+ 
+ #endif
+diff --git a/src/compressor/brotli/BrotliCompressor.cc b/src/compressor/brotli/BrotliCompressor.cc
+index 27685da3..b171e79b 100644
+--- a/src/compressor/brotli/BrotliCompressor.cc
++++ b/src/compressor/brotli/BrotliCompressor.cc
+@@ -5,7 +5,7 @@
+ 
+ #define MAX_LEN (CEPH_PAGE_SIZE)
+ 
+-int BrotliCompressor::compress(const bufferlist &in, bufferlist &out) 
++int int BrotliCompressor::compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message)
+ {
+   BrotliEncoderState* s = BrotliEncoderCreateInstance(nullptr,
+                                                       nullptr,
+@@ -49,7 +49,8 @@ int BrotliCompressor::compress(const bufferlist &in, bufferlist &out)
+ 
+ int BrotliCompressor::decompress(bufferlist::const_iterator &p,
+                                  size_t compressed_size,
+-                                 bufferlist &out) 
++                                 bufferlist &out,
++                        				 boost::optional<int32_t> compressor_message) 
+ {
+   BrotliDecoderState* s = BrotliDecoderCreateInstance(nullptr,
+                                                       nullptr,
+@@ -88,8 +89,8 @@ int BrotliCompressor::decompress(bufferlist::const_iterator &p,
+   return 0;
+ }
+ 
+-int BrotliCompressor::decompress(const bufferlist &in, bufferlist &out) 
++int BrotliCompressor::decompress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> compressor_message 
+ {  
+   auto i = std::cbegin(in);
+-  return decompress(i, in.length(), out);
++  return decompress(i, in.length(), out, compressor_message);
+ }
+diff --git a/src/compressor/brotli/BrotliCompressor.h b/src/compressor/brotli/BrotliCompressor.h
+index 482fe5e2..37330064 100644
+--- a/src/compressor/brotli/BrotliCompressor.h
++++ b/src/compressor/brotli/BrotliCompressor.h
+@@ -22,9 +22,9 @@ class BrotliCompressor : public Compressor
+   public:
+   BrotliCompressor() : Compressor(COMP_ALG_BROTLI, "brotli") {}
+   
+-  int compress(const bufferlist &in, bufferlist &out) override;
+-  int decompress(const bufferlist &in, bufferlist &out) override;
+-  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &out) override;
++  int compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message) override;
++  int decompress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> compressor_message) override;
++  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &out, boost::optional<int32_t> compressor_message) override;
+ };
+ 
+ #endif //CEPH_BROTLICOMPRESSOR_H
+diff --git a/src/compressor/glz/CMakeLists.txt b/src/compressor/glz/CMakeLists.txt
+new file mode 100644
+index 00000000..e61480cc
+--- /dev/null
++++ b/src/compressor/glz/CMakeLists.txt
+@@ -0,0 +1,13 @@
++# glz 
++
++set(glz_sources
++  CompressionPluginGLZ.cc
++)
++
++add_library(ceph_glz SHARED ${glz_sources})
++target_link_libraries(ceph_glz PRIVATE glz)
++set_target_properties(ceph_glz PROPERTIES
++  VERSION 2.0.0
++  SOVERSION 2
++  INSTALL_RPATH "")
++install(TARGETS ceph_glz DESTINATION ${compressor_plugin_dir})
+diff --git a/src/compressor/glz/CompressionPluginGLZ.cc b/src/compressor/glz/CompressionPluginGLZ.cc
+new file mode 100644
+index 00000000..58cb5e9d
+--- /dev/null
++++ b/src/compressor/glz/CompressionPluginGLZ.cc
+@@ -0,0 +1,22 @@
++#include "acconfig.h"
++#include "ceph_ver.h"
++#include "common/ceph_context.h"
++#include "CompressionPluginGLZ.h"
++
++// -----------------------------------------------------------------------------
++
++const char *__ceph_plugin_version()
++{
++  return CEPH_GIT_NICE_VER;
++}
++
++// -----------------------------------------------------------------------------
++
++int __ceph_plugin_init(CephContext *cct,
++                       const std::string& type,
++                       const std::string& name)
++{
++  PluginRegistry *instance = cct->get_plugin_registry();
++
++  return instance->add(type, name, new CompressionPluginGLZ(cct));
++}
+diff --git a/src/compressor/glz/CompressionPluginGLZ.h b/src/compressor/glz/CompressionPluginGLZ.h
+new file mode 100644
+index 00000000..f7bc77a3
+--- /dev/null
++++ b/src/compressor/glz/CompressionPluginGLZ.h
+@@ -0,0 +1,42 @@
++/*
++ * Ceph - scalable distributed file system
++ *
++ * Copyright (C) 2017 XSKY Inc.
++ *
++ * Author: Haomai Wang <haomaiwang@gmail.com>
++ *
++ *  This library is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU Lesser General Public
++ *  License as published by the Free Software Foundation; either
++ *  version 2.1 of the License, or (at your option) any later version.
++ *
++ */
++
++#ifndef CEPH_COMPRESSION_PLUGIN_GLZ_H
++#define CEPH_COMPRESSION_PLUGIN_GLZ_H
++
++// -----------------------------------------------------------------------------
++#include "ceph_ver.h"
++#include "compressor/CompressionPlugin.h"
++#include "GLZCompressor.h"
++// -----------------------------------------------------------------------------
++
++class CompressionPluginGLZ : public CompressionPlugin {
++
++public:
++
++  explicit CompressionPluginGLZ(CephContext* cct) : CompressionPlugin(cct)
++  {}
++  ~CompressionPluginGLZ() {}
++
++  int factory(CompressorRef *cs, std::ostream *ss) override {
++    if (compressor == 0) {
++      GLZCompressor *interface = new GLZCompressor(cct);
++      compressor = CompressorRef(interface);
++    }
++    *cs = compressor;
++    return 0;
++  }
++};
++
++#endif
+diff --git a/src/compressor/glz/GLZCompressor.h b/src/compressor/glz/GLZCompressor.h
+new file mode 100644
+index 00000000..53442dd2
+--- /dev/null
++++ b/src/compressor/glz/GLZCompressor.h
+@@ -0,0 +1,136 @@
++// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
++// vim: ts=8 sw=2 smarttab
++/*
++ * Ceph - scalable distributed file system
++ *
++ * Copyright (C) 2017 Haomai Wang <haomaiwang@gmail.com>
++ *
++ * This is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License version 2.1, as published by the Free Software 
++ * Foundation.  See file COPYING.
++ *
++ */
++
++#ifndef CEPH_GLZCOMPRESSOR_H
++#define CEPH_GLZCOMPRESSOR_H
++
++#include <glz.h>
++
++#include "compressor/Compressor.h"
++#include "include/buffer.h"
++#include "include/encoding.h"
++#include "common/config.h"
++#include "common/Tub.h"
++
++#define GLZ_DEFAULT_LEVEL 1
++
++class GLZCompressor : public Compressor {
++ CephContext *const cct;
++
++  public:
++  GLZCompressor(CephContext* cct) : Compressor(COMP_ALG_GLZ, "glz"), cct(cct) {}
++  ~GLZCompressor() {}
++
++  int compress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> &compressor_message) override {
++
++    if (!src.is_contiguous()) {
++      bufferlist new_src = src;
++      new_src.rebuild();
++      return compress(new_src, dst, compressor_message);
++    }
++    bufferptr outptr = buffer::create_small_page_aligned(src.length());
++
++    auto p = src.begin();
++    size_t left = src.length();
++    int pos = 0;
++    const char *data = nullptr;
++    unsigned num = src.get_num_buffers();
++    encode((uint32_t)num, dst);
++    glz_encoder* glz_stream = nullptr;
++    glz_stream = glz_compress_initial((long unsigned)left);
++    if (glz_stream == nullptr) {
++	return -2;
++    }
++    encode_model glz_mode = GLZ_FAST;
++    if (cct->_conf->compressor_glz_level == GLZ_HIGH_CR) {
++	glz_mode = GLZ_HIGH_CR;
++    }
++
++    while (left) {
++      uint32_t origin_len = p.get_ptr_and_advance(left, &data);
++      int compressed_len = glz_compress_default((const glz_encoder *)glz_stream, outptr.c_str()+pos, outptr.length()-pos, data, origin_len, glz_mode, GLZ_DEFAULT_LEVEL);
++      if (compressed_len <= 0){ 
++        glz_compress_delete(&glz_stream);
++	return -1;
++      }
++      pos += compressed_len;
++      left -= origin_len;
++      encode(origin_len, dst);
++      encode((uint32_t)compressed_len, dst);
++    }
++    glz_compress_delete(&glz_stream);
++    if (!p.end()) {
++      return -1;
++    }
++    compressor_message = cct->_conf->compressor_glz_level;
++    dst.append(outptr, 0, pos);
++    
++    return 0;
++  }
++
++  int decompress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> compressor_message) override {
++    auto i = std::cbegin(src);
++    return decompress(i, src.length(), dst, compressor_message);
++  }
++
++  int decompress(bufferlist::const_iterator &p,
++		 size_t compressed_len,
++		 bufferlist &dst,
++		 boost::optional<int32_t> compressor_message) override {
++    uint32_t count;
++    std::vector<std::pair<uint32_t, uint32_t> > compressed_pairs;
++    decode(count, p);
++    compressed_pairs.resize(count);
++    uint32_t total_origin = 0;
++    for (unsigned i = 0; i < count; ++i) {
++      decode(compressed_pairs[i].first, p);
++      decode(compressed_pairs[i].second, p);
++      total_origin += compressed_pairs[i].first;
++    }
++    compressed_len -= (sizeof(uint32_t) + sizeof(uint32_t) * count * 2);
++
++    bufferptr dstptr(total_origin);
++
++    bufferptr cur_ptr = p.get_current_ptr();
++    bufferptr *ptr = &cur_ptr;
++    Tub<bufferptr> data_holder;
++    if (compressed_len != cur_ptr.length()) {
++      data_holder.construct(compressed_len);
++      p.copy_deep(compressed_len, *data_holder);
++      ptr = data_holder.get();
++    }
++
++    char *c_in = ptr->c_str();
++    char *c_out = dstptr.c_str();
++    encode_model glz_mode = GLZ_FAST;
++    if(*compressor_message == GLZ_HIGH_CR) {
++       glz_mode = GLZ_HIGH_CR;
++    }
++    for (unsigned i = 0; i < count; ++i) {
++      int r = glz_decompress_default((const glz_encoder *)c_in, c_out, compressed_pairs[i].first, c_in, compressed_pairs[i].second,glz_mode);
++      if (r == (int)compressed_pairs[i].first) {
++        c_in += compressed_pairs[i].second;
++        c_out += compressed_pairs[i].first;
++      } else if (r < 0) {
++        return -1;
++      } else {
++        return -2;
++      }
++    }
++    dst.push_back(std::move(dstptr));
++    return 0;
++  }
++};
++
++#endif
+diff --git a/src/compressor/lz4/LZ4Compressor.h b/src/compressor/lz4/LZ4Compressor.h
+index 8189f18f..6edfe9db 100644
+--- a/src/compressor/lz4/LZ4Compressor.h
++++ b/src/compressor/lz4/LZ4Compressor.h
+@@ -35,10 +35,22 @@ class LZ4Compressor : public Compressor {
+ #endif
+   }
+ 
+-  int compress(const bufferlist &src, bufferlist &dst) override {
++  int compress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> &compressor_message) override {
++    // older versions of liblz4 introduce bit errors when compressing
++    // fragmented buffers.  this was fixed in lz4 commit
++    // af127334670a5e7b710bbd6adb71aa7c3ef0cd72, which first
++    // appeared in v1.8.2.
++    //
++    // workaround: rebuild if not contiguous.
++    if (!src.is_contiguous()) {
++      bufferlist new_src = src;
++      new_src.rebuild();
++      return compress(new_src, dst, compressor_message);
++    }
++
+ #ifdef HAVE_QATZIP
+     if (qat_enabled)
+-      return qat_accel.compress(src, dst);
++      return qat_accel.compress(src, dst, compressor_message);
+ #endif
+     bufferptr outptr = buffer::create_small_page_aligned(
+       LZ4_compressBound(src.length()));
+@@ -69,21 +81,22 @@ class LZ4Compressor : public Compressor {
+     return 0;
+   }
+ 
+-  int decompress(const bufferlist &src, bufferlist &dst) override {
++  int decompress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> compressor_message) override {
+ #ifdef HAVE_QATZIP
+     if (qat_enabled)
+-      return qat_accel.decompress(src, dst);
++      return qat_accel.decompress(src, dst, compressor_message);
+ #endif
+     auto i = std::cbegin(src);
+-    return decompress(i, src.length(), dst);
++    return decompress(i, src.length(), dst, compressor_message);
+   }
+ 
+   int decompress(bufferlist::const_iterator &p,
+ 		 size_t compressed_len,
+-		 bufferlist &dst) override {
++		 bufferlist &dst,
++		 boost::optional<int32_t> compressor_message) override {
+ #ifdef HAVE_QATZIP
+     if (qat_enabled)
+-      return qat_accel.decompress(p, compressed_len, dst);
++      return qat_accel.decompress(p, compressed_len, dst, compressor_message);
+ #endif
+     uint32_t count;
+     std::vector<std::pair<uint32_t, uint32_t> > compressed_pairs;
+diff --git a/src/compressor/snappy/SnappyCompressor.h b/src/compressor/snappy/SnappyCompressor.h
+index 0291a923..c343069e 100644
+--- a/src/compressor/snappy/SnappyCompressor.h
++++ b/src/compressor/snappy/SnappyCompressor.h
+@@ -66,10 +66,10 @@ class SnappyCompressor : public Compressor {
+ #endif
+   }
+ 
+-  int compress(const bufferlist &src, bufferlist &dst) override {
++  int compress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> &compressor_message) override {
+ #ifdef HAVE_QATZIP
+     if (qat_enabled)
+-      return qat_accel.compress(src, dst);
++      return qat_accel.compress(src, dst, compressor_message);
+ #endif
+     BufferlistSource source(const_cast<bufferlist&>(src).begin(), src.length());
+     bufferptr ptr = buffer::create_small_page_aligned(
+@@ -80,21 +80,22 @@ class SnappyCompressor : public Compressor {
+     return 0;
+   }
+ 
+-  int decompress(const bufferlist &src, bufferlist &dst) override {
++  int decompress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> compressor_message) override {
+ #ifdef HAVE_QATZIP
+     if (qat_enabled)
+-      return qat_accel.decompress(src, dst);
++      return qat_accel.decompress(src, dst, compressor_message);
+ #endif
+     auto i = src.begin();
+-    return decompress(i, src.length(), dst);
++    return decompress(i, src.length(), dst, compressor_message);
+   }
+ 
+   int decompress(bufferlist::const_iterator &p,
+ 		 size_t compressed_len,
+-		 bufferlist &dst) override {
++		 bufferlist &dst,
++		 boost::optional<int32_t> compressor_message) override {
+ #ifdef HAVE_QATZIP
+     if (qat_enabled)
+-      return qat_accel.decompress(p, compressed_len, dst);
++      return qat_accel.decompress(p, compressed_len, dst, compressor_message);
+ #endif
+     snappy::uint32 res_len = 0;
+     BufferlistSource source_1(p, compressed_len);
+diff --git a/src/compressor/zlib/ZlibCompressor.cc b/src/compressor/zlib/ZlibCompressor.cc
+index e3064d2a..566f517a 100644
+--- a/src/compressor/zlib/ZlibCompressor.cc
++++ b/src/compressor/zlib/ZlibCompressor.cc
+@@ -47,7 +47,7 @@ _prefix(std::ostream* _dout)
+ // compression ratio.
+ #define ZLIB_MEMORY_LEVEL 8
+ 
+-int ZlibCompressor::zlib_compress(const bufferlist &in, bufferlist &out)
++int ZlibCompressor::zlib_compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message)
+ {
+   int ret;
+   unsigned have;
+@@ -59,13 +59,14 @@ int ZlibCompressor::zlib_compress(const bufferlist &in, bufferlist &out)
+   strm.zalloc = Z_NULL;
+   strm.zfree = Z_NULL;
+   strm.opaque = Z_NULL;
+-  ret = deflateInit2(&strm, cct->_conf->compressor_zlib_level, Z_DEFLATED, ZLIB_DEFAULT_WIN_SIZE, ZLIB_MEMORY_LEVEL, Z_DEFAULT_STRATEGY);
++  ret = deflateInit2(&strm, cct->_conf->compressor_zlib_level, Z_DEFLATED, cct->_conf->compressor_zlib_winsize, ZLIB_MEMORY_LEVEL, Z_DEFAULT_STRATEGY);
+   if (ret != Z_OK) {
+     dout(1) << "Compression init error: init return "
+          << ret << " instead of Z_OK" << dendl;
+     return -1;
+   }
+-
++  compressor_message = cct->_conf->compressor_zlib_winsize;
++ 
+   for (ceph::bufferlist::buffers_t::const_iterator i = in.buffers().begin();
+       i != in.buffers().end();) {
+ 
+@@ -108,7 +109,7 @@ int ZlibCompressor::zlib_compress(const bufferlist &in, bufferlist &out)
+ }
+ 
+ #if __x86_64__ && defined(HAVE_BETTER_YASM_ELF64)
+-int ZlibCompressor::isal_compress(const bufferlist &in, bufferlist &out)
++int ZlibCompressor::isal_compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message)
+ {
+   int ret;
+   unsigned have;
+@@ -120,6 +121,7 @@ int ZlibCompressor::isal_compress(const bufferlist &in, bufferlist &out)
+   isal_deflate_init(&strm);
+   strm.end_of_stream = 0;
+ 
++  compressor_message = ZLIB_DEFAULT_WIN_SIZE;
+   for (ceph::bufferlist::buffers_t::const_iterator i = in.buffers().begin();
+       i != in.buffers().end();) {
+ 
+@@ -161,27 +163,27 @@ int ZlibCompressor::isal_compress(const bufferlist &in, bufferlist &out)
+ }
+ #endif
+ 
+-int ZlibCompressor::compress(const bufferlist &in, bufferlist &out)
++int ZlibCompressor::compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message)
+ {
+ #ifdef HAVE_QATZIP
+   if (qat_enabled)
+-    return qat_accel.compress(in, out);
++    return qat_accel.compress(in, out, compressor_message);
+ #endif
+ #if __x86_64__ && defined(HAVE_BETTER_YASM_ELF64)
+   if (isal_enabled)
+-    return isal_compress(in, out);
++    return isal_compress(in, out, compressor_message);
+   else
+-    return zlib_compress(in, out);
++    return zlib_compress(in, out, compressor_message);
+ #else
+-  return zlib_compress(in, out);
++  return zlib_compress(in, out, compressor_message);
+ #endif
+ }
+ 
+-int ZlibCompressor::decompress(bufferlist::const_iterator &p, size_t compressed_size, bufferlist &out)
++int ZlibCompressor::decompress(bufferlist::const_iterator &p, size_t compressed_size, bufferlist &out, boost::optional<int32_t> compressor_message)
+ {
+ #ifdef HAVE_QATZIP
+   if (qat_enabled)
+-    return qat_accel.decompress(p, compressed_size, out);
++    return qat_accel.decompress(p, compressed_size, out, compressor_message);
+ #endif
+ 
+   int ret;
+@@ -198,7 +200,9 @@ int ZlibCompressor::decompress(bufferlist::const_iterator &p, size_t compressed_
+   strm.next_in = Z_NULL;
+ 
+   // choose the variation of compressor
+-  ret = inflateInit2(&strm, ZLIB_DEFAULT_WIN_SIZE);
++  if (!compressor_message)
++    compressor_message = ZLIB_DEFAULT_WIN_SIZE;
++  ret = inflateInit2(&strm, *compressor_message);
+   if (ret != Z_OK) {
+     dout(1) << "Decompression init error: init return "
+          << ret << " instead of Z_OK" << dendl;
+@@ -235,12 +239,12 @@ int ZlibCompressor::decompress(bufferlist::const_iterator &p, size_t compressed_
+   return 0;
+ }
+ 
+-int ZlibCompressor::decompress(const bufferlist &in, bufferlist &out)
++int ZlibCompressor::decompress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> compressor_message)
+ {
+ #ifdef HAVE_QATZIP
+   if (qat_enabled)
+-    return qat_accel.decompress(in, out);
++    return qat_accel.decompress(in, out, compressor_message);
+ #endif
+   auto i = std::cbegin(in);
+-  return decompress(i, in.length(), out);
++  return decompress(i, in.length(), out, compressor_message);
+ }
+diff --git a/src/compressor/zlib/ZlibCompressor.h b/src/compressor/zlib/ZlibCompressor.h
+index d770547a..5df5d682 100644
+--- a/src/compressor/zlib/ZlibCompressor.h
++++ b/src/compressor/zlib/ZlibCompressor.h
+@@ -34,12 +34,12 @@ public:
+ #endif
+   }
+ 
+-  int compress(const bufferlist &in, bufferlist &out) override;
+-  int decompress(const bufferlist &in, bufferlist &out) override;
+-  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &out) override;
++  int compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message) override;
++  int decompress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> compressor_message) override;
++  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &out, boost::optional<int32_t> compressor_message) override;
+ private:
+-  int zlib_compress(const bufferlist &in, bufferlist &out);
+-  int isal_compress(const bufferlist &in, bufferlist &out);
++  int zlib_compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message);
++  int isal_compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message);
+  };
+ 
+ 
+diff --git a/src/compressor/zstd/ZstdCompressor.h b/src/compressor/zstd/ZstdCompressor.h
+index 0b17c99a..ad76465a 100644
+--- a/src/compressor/zstd/ZstdCompressor.h
++++ b/src/compressor/zstd/ZstdCompressor.h
+@@ -28,7 +28,7 @@ class ZstdCompressor : public Compressor {
+  public:
+   ZstdCompressor() : Compressor(COMP_ALG_ZSTD, "zstd") {}
+ 
+-  int compress(const bufferlist &src, bufferlist &dst) override {
++  int compress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> &compressor_message) override {
+     ZSTD_CStream *s = ZSTD_createCStream();
+     ZSTD_initCStream_srcSize(s, COMPRESSION_LEVEL, src.length());
+     auto p = src.begin();
+@@ -63,14 +63,15 @@ class ZstdCompressor : public Compressor {
+     return 0;
+   }
+ 
+-  int decompress(const bufferlist &src, bufferlist &dst) override {
++  int decompress(const bufferlist &src, bufferlist &dst, boost::optional<int32_t> compressor_message) override {
+     auto i = std::cbegin(src);
+-    return decompress(i, src.length(), dst);
++    return decompress(i, src.length(), dst, compressor_message);
+   }
+ 
+   int decompress(bufferlist::const_iterator &p,
+ 		 size_t compressed_len,
+-		 bufferlist &dst) override {
++		 bufferlist &dst,
++		 boost::optional<int32_t> compressor_message) override {
+     if (compressed_len < 4) {
+       return -1;
+     }
+diff --git a/src/os/bluestore/BlueStore.cc b/src/os/bluestore/BlueStore.cc
+index 253efb5a..e786db06 100644
+--- a/src/os/bluestore/BlueStore.cc
++++ b/src/os/bluestore/BlueStore.cc
+@@ -9413,7 +9413,7 @@ int BlueStore::_decompress(bufferlist& source, bufferlist* result)
+     _set_compression_alert(false, alg_name);
+     r = -EIO;
+   } else {
+-    r = cp->decompress(i, chdr.length, *result);
++    r = cp->decompress(i, chdr.length, *result, chdr.compressor_message);
+     if (r < 0) {
+       derr << __func__ << " decompression failed with exit code " << r << dendl;
+       r = -EIO;
+@@ -12519,7 +12519,8 @@ int BlueStore::_do_alloc_write(
+ 
+       // FIXME: memory alignment here is bad
+       bufferlist t;
+-      int r = c->compress(wi.bl, t);
++      boost::optional<int32_t> compressor_message;
++      int r = c->compress(wi.bl, t, compressor_message);
+       uint64_t want_len_raw = wi.blob_length * crr;
+       uint64_t want_len = p2roundup(want_len_raw, min_alloc_size);
+       bool rejected = false;
+@@ -12531,6 +12532,7 @@ int BlueStore::_do_alloc_write(
+ 	bluestore_compression_header_t chdr;
+ 	chdr.type = c->get_type();
+ 	chdr.length = t.length();
++        chdr.compressor_message = compressor_message;
+ 	encode(chdr, wi.compressed_bl);
+ 	wi.compressed_bl.claim_append(t);
+ 
+diff --git a/src/os/bluestore/bluestore_types.cc b/src/os/bluestore/bluestore_types.cc
+index 4d7e14af..5c2f9b42 100644
+--- a/src/os/bluestore/bluestore_types.cc
++++ b/src/os/bluestore/bluestore_types.cc
+@@ -1121,6 +1121,9 @@ void bluestore_compression_header_t::dump(Formatter *f) const
+ {
+   f->dump_unsigned("type", type);
+   f->dump_unsigned("length", length);
++  if (compressor_message) {
++    f->dump_int("compressor_message", *compressor_message);
++  }
+ }
+ 
+ void bluestore_compression_header_t::generate_test_instances(
+diff --git a/src/os/bluestore/bluestore_types.h b/src/os/bluestore/bluestore_types.h
+index f58a079c..6ba48c18 100644
+--- a/src/os/bluestore/bluestore_types.h
++++ b/src/os/bluestore/bluestore_types.h
+@@ -1016,15 +1016,19 @@ WRITE_CLASS_DENC(bluestore_deferred_transaction_t)
+ struct bluestore_compression_header_t {
+   uint8_t type = Compressor::COMP_ALG_NONE;
+   uint32_t length = 0;
++  boost::optional<int32_t> compressor_message;
+ 
+   bluestore_compression_header_t() {}
+   bluestore_compression_header_t(uint8_t _type)
+     : type(_type) {}
+ 
+   DENC(bluestore_compression_header_t, v, p) {
+-    DENC_START(1, 1, p);
++    DENC_START(2, 1, p);
+     denc(v.type, p);
+     denc(v.length, p);
++    if (struct_v >= 2){
++      denc(v.compressor_message, p);
++    }
+     DENC_FINISH(p);
+   }
+   void dump(Formatter *f) const;
+diff --git a/src/rgw/rgw_compression.cc b/src/rgw/rgw_compression.cc
+index bcd7fbc2..da26230e 100644
+--- a/src/rgw/rgw_compression.cc
++++ b/src/rgw/rgw_compression.cc
+@@ -15,7 +15,7 @@ int RGWPutObj_Compress::process(bufferlist&& in, uint64_t logical_offset)
+     if ((logical_offset > 0 && compressed) || // if previous part was compressed
+         (logical_offset == 0)) {              // or it's the first part
+       ldout(cct, 10) << "Compression for rgw is enabled, compress part " << in.length() << dendl;
+-      int cr = compressor->compress(in, out);
++      int cr = compressor->compress(in, out, compressor_message);
+       if (cr < 0) {
+         if (logical_offset > 0) {
+           lderr(cct) << "Compression failed with exit code " << cr
+@@ -96,7 +96,7 @@ int RGWGetObj_Decompress::handle_data(bufferlist& bl, off_t bl_ofs, off_t bl_len
+       break;
+     }
+     in_bl.copy(ofs_in_bl, first_block->len, tmp);
+-    int cr = compressor->decompress(tmp, out_bl);
++    int cr = compressor->decompress(tmp, out_bl, cs_info->compressor_message);
+     if (cr < 0) {
+       lderr(cct) << "Decompression failed with exit code " << cr << dendl;
+       return cr;
+diff --git a/src/rgw/rgw_compression.h b/src/rgw/rgw_compression.h
+index e0448044..949b455f 100644
+--- a/src/rgw/rgw_compression.h
++++ b/src/rgw/rgw_compression.h
+@@ -37,6 +37,7 @@ class RGWPutObj_Compress : public rgw::putobj::Pipe
+   CephContext* cct;
+   bool compressed{false};
+   CompressorRef compressor;
++  boost::optional<int32_t> compressor_message;
+   std::vector<compression_block> blocks;
+ public:
+   RGWPutObj_Compress(CephContext* cct_, CompressorRef compressor,
+@@ -47,6 +48,7 @@ public:
+ 
+   bool is_compressed() { return compressed; }
+   vector<compression_block>& get_compression_blocks() { return blocks; }
++  boost::optional<int32_t> get_compressor_message() { return compressor_message; }
+ 
+ }; /* RGWPutObj_Compress */
+ 
+diff --git a/src/rgw/rgw_file.cc b/src/rgw/rgw_file.cc
+index d2aec4e7..1721d736 100644
+--- a/src/rgw/rgw_file.cc
++++ b/src/rgw/rgw_file.cc
+@@ -1658,6 +1658,7 @@ namespace rgw {
+       RGWCompressionInfo cs_info;
+       cs_info.compression_type = plugin->get_type_name();
+       cs_info.orig_size = s->obj_size;
++      cs_info.compressor_message = compressor->get_compressor_message();
+       cs_info.blocks = std::move(compressor->get_compression_blocks());
+       encode(cs_info, tmp);
+       attrs[RGW_ATTR_COMPRESSION] = tmp;
+diff --git a/src/rgw/rgw_json_enc.cc b/src/rgw/rgw_json_enc.cc
+index b9a2ed26..74078d82 100644
+--- a/src/rgw/rgw_json_enc.cc
++++ b/src/rgw/rgw_json_enc.cc
+@@ -1752,4 +1752,7 @@ void RGWCompressionInfo::dump(Formatter *f) const
+   f->dump_string("compression_type", compression_type);
+   f->dump_unsigned("orig_size", orig_size);
+   ::encode_json("blocks", blocks, f);
++  if (compressor_message) {
++    f->dump_int("compressor_message", *compressor_message);
++  }
+ }
+diff --git a/src/rgw/rgw_op.cc b/src/rgw/rgw_op.cc
+index 0005c9ee..8a37618b 100644
+--- a/src/rgw/rgw_op.cc
++++ b/src/rgw/rgw_op.cc
+@@ -3876,6 +3876,7 @@ void RGWPutObj::execute()
+     RGWCompressionInfo cs_info;
+     cs_info.compression_type = plugin->get_type_name();
+     cs_info.orig_size = s->obj_size;
++    cs_info.compressor_message = compressor->get_compressor_message();
+     cs_info.blocks = move(compressor->get_compression_blocks());
+     encode(cs_info, tmp);
+     attrs[RGW_ATTR_COMPRESSION] = tmp;
+@@ -4188,6 +4189,7 @@ void RGWPostObj::execute()
+       RGWCompressionInfo cs_info;
+       cs_info.compression_type = plugin->get_type_name();
+       cs_info.orig_size = s->obj_size;
++      cs_info.compressor_message = compressor->get_compressor_message();
+       cs_info.blocks = move(compressor->get_compression_blocks());
+       encode(cs_info, tmp);
+       emplace_attr(RGW_ATTR_COMPRESSION, std::move(tmp));
+@@ -7061,6 +7063,7 @@ int RGWBulkUploadOp::handle_file(const boost::string_ref path,
+     RGWCompressionInfo cs_info;
+     cs_info.compression_type = plugin->get_type_name();
+     cs_info.orig_size = s->obj_size;
++    cs_info.compressor_message = compressor->get_compressor_message();
+     cs_info.blocks = std::move(compressor->get_compression_blocks());
+     encode(cs_info, tmp);
+     attrs.emplace(RGW_ATTR_COMPRESSION, std::move(tmp));
+diff --git a/src/rgw/rgw_rados.cc b/src/rgw/rgw_rados.cc
+index 19a83da6..f8200532 100644
+--- a/src/rgw/rgw_rados.cc
++++ b/src/rgw/rgw_rados.cc
+@@ -4407,6 +4407,7 @@ int RGWRados::fetch_remote_obj(RGWObjectCtx& obj_ctx,
+     RGWCompressionInfo cs_info;
+     cs_info.compression_type = plugin->get_type_name();
+     cs_info.orig_size = cb.get_data_len();
++    cs_info.compressor_message = compressor->get_compressor_message();
+     cs_info.blocks = move(compressor->get_compression_blocks());
+     encode(cs_info, tmp);
+     cb.get_attrs()[RGW_ATTR_COMPRESSION] = tmp;
+diff --git a/src/rgw/rgw_rados.h b/src/rgw/rgw_rados.h
+index deb8b553..5a7cd511 100644
+--- a/src/rgw/rgw_rados.h
++++ b/src/rgw/rgw_rados.h
+@@ -212,25 +212,31 @@ WRITE_CLASS_ENCODER(compression_block)
+ struct RGWCompressionInfo {
+   string compression_type;
+   uint64_t orig_size;
++  boost::optional<int32_t> compressor_message;
+   vector<compression_block> blocks;
+ 
+   RGWCompressionInfo() : compression_type("none"), orig_size(0) {}
+   RGWCompressionInfo(const RGWCompressionInfo& cs_info) : compression_type(cs_info.compression_type),
+                                                           orig_size(cs_info.orig_size),
++                                                          compressor_message(cs_info.compressor_message),
+                                                           blocks(cs_info.blocks) {}
+ 
+   void encode(bufferlist& bl) const {
+-    ENCODE_START(1, 1, bl);
++    ENCODE_START(2, 1, bl);
+     encode(compression_type, bl);
+     encode(orig_size, bl);
++    encode(compressor_message, bl);
+     encode(blocks, bl);
+     ENCODE_FINISH(bl);
+   }
+ 
+   void decode(bufferlist::const_iterator& bl) {
+-     DECODE_START(1, bl);
++     DECODE_START(2, bl);
+      decode(compression_type, bl);
+      decode(orig_size, bl);
++     if (struct_v >= 2) {
++	    decode(compressor_message, bl);
++    }
+      decode(blocks, bl);
+      DECODE_FINISH(bl);
+   } 
+diff --git a/src/test/compressor/compressor_example.h b/src/test/compressor/compressor_example.h
+index a2dbd8f6..3afd59a7 100644
+--- a/src/test/compressor/compressor_example.h
++++ b/src/test/compressor/compressor_example.h
+@@ -32,18 +32,18 @@ public:
+   CompressorExample() : Compressor(COMP_ALG_NONE, "example") {}
+   ~CompressorExample() override {}
+ 
+-  int compress(const bufferlist &in, bufferlist &out) override
++  int compress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> &compressor_message) override
+   {
+     out = in;
+     return 0;
+   }
+ 
+-  int decompress(const bufferlist &in, bufferlist &out) override
++  int decompress(const bufferlist &in, bufferlist &out, boost::optional<int32_t> compressor_message) override
+   {
+     out = in;
+     return 0;
+   }
+-  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &out) override
++  int decompress(bufferlist::const_iterator &p, size_t compressed_len, bufferlist &out, boost::optional<int32_t> compressor_message) override
+   {
+     p.copy(std::min<size_t>(p.get_remaining(), compressed_len), out);
+     return 0;
+diff --git a/src/test/compressor/test_compression.cc b/src/test/compressor/test_compression.cc
+index 102ab561..7c0a5d1d 100644
+--- a/src/test/compressor/test_compression.cc
++++ b/src/test/compressor/test_compression.cc
+@@ -47,6 +47,12 @@ public:
+       } else if (isal == "noisal") {
+ 	g_conf().set_val("compressor_zlib_isal", "false");
+ 	g_ceph_context->_conf.apply_changes(nullptr);
++      } else if (isal == "level0") {
++        g_conf().set_val("compressor_glz_level", "0");
++        g_ceph_context->_conf.apply_changes(nullptr);
++      } else if (isal == "level1") {
++        g_conf().set_val("compressor_glz_level", "1");
++        g_ceph_context->_conf.apply_changes(nullptr);
+       } else {
+ 	ceph_abort_msg("bad option");
+       }
+@@ -76,10 +82,11 @@ TEST_P(CompressorTest, small_round_trip)
+   bufferlist orig;
+   orig.append("This is a short string.  There are many strings like it but this one is mine.");
+   bufferlist compressed;
+-  int r = compressor->compress(orig, compressed);
++  boost::optional<int32_t> compressor_message;
++  int r = compressor->compress(orig, compressed, compressor_message);
+   ASSERT_EQ(0, r);
+   bufferlist decompressed;
+-  r = compressor->decompress(compressed, decompressed);
++  r = compressor->decompress(compressed, decompressed, compressor_message);
+   ASSERT_EQ(0, r);
+   ASSERT_EQ(decompressed.length(), orig.length());
+   ASSERT_TRUE(decompressed.contents_equal(orig));
+@@ -95,10 +102,11 @@ TEST_P(CompressorTest, big_round_trip_repeated)
+     orig.append("This is a short string.  There are many strings like it but this one is mine.");
+   }
+   bufferlist compressed;
+-  int r = compressor->compress(orig, compressed);
++  boost::optional<int32_t> compressor_message;
++  int r = compressor->compress(orig, compressed, compressor_message);
+   ASSERT_EQ(0, r);
+   bufferlist decompressed;
+-  r = compressor->decompress(compressed, decompressed);
++  r = compressor->decompress(compressed, decompressed, compressor_message);
+   ASSERT_EQ(0, r);
+   ASSERT_EQ(decompressed.length(), orig.length());
+   ASSERT_TRUE(decompressed.contents_equal(orig));
+@@ -124,10 +132,11 @@ TEST_P(CompressorTest, big_round_trip_randomish)
+     orig.append(bp);
+   }
+   bufferlist compressed;
+-  int r = compressor->compress(orig, compressed);
++  boost::optional<int32_t> compressor_message;
++  int r = compressor->compress(orig, compressed, compressor_message);
+   ASSERT_EQ(0, r);
+   bufferlist decompressed;
+-  r = compressor->decompress(compressed, decompressed);
++  r = compressor->decompress(compressed, decompressed, compressor_message);
+   ASSERT_EQ(0, r);
+   ASSERT_EQ(decompressed.length(), orig.length());
+   ASSERT_TRUE(decompressed.contents_equal(orig));
+@@ -167,9 +176,10 @@ TEST_P(CompressorTest, compress_decompress)
+   bufferlist after;
+   bufferlist exp;
+   in.append(test, len);
+-  res = compressor->compress(in, out);
++  boost::optional<int32_t> compressor_message;
++  res = compressor->compress(in, out, compressor_message);
+   EXPECT_EQ(res, 0);
+-  res = compressor->decompress(out, after);
++  res = compressor->decompress(out, after, compressor_message);
+   EXPECT_EQ(res, 0);
+   exp.append(test);
+   EXPECT_TRUE(exp.contents_equal(after));
+@@ -177,7 +187,7 @@ TEST_P(CompressorTest, compress_decompress)
+   size_t compressed_len = out.length();
+   out.append_zero(12);
+   auto it = out.cbegin();
+-  res = compressor->decompress(it, compressed_len, after);
++  res = compressor->decompress(it, compressed_len, after, compressor_message);
+   EXPECT_EQ(res, 0);
+   EXPECT_TRUE(exp.contents_equal(after));
+ 
+@@ -190,7 +200,7 @@ TEST_P(CompressorTest, compress_decompress)
+   out.clear();
+   in.append(data);
+   exp = in;
+-  res = compressor->compress(in, out);
++  res = compressor->compress(in, out, compressor_message);
+   EXPECT_EQ(res, 0);
+   compressed_len = out.length();
+   out.append_zero(0x10000 - out.length());
+@@ -203,7 +213,7 @@ TEST_P(CompressorTest, compress_decompress)
+   out.swap(prefix);
+   it = out.cbegin();
+   it.advance(prefix_len);
+-  res = compressor->decompress(it, compressed_len, after);
++  res = compressor->decompress(it, compressed_len, after, compressor_message);
+   EXPECT_EQ(res, 0);
+   EXPECT_TRUE(exp.contents_equal(after));
+ }
+@@ -216,7 +226,8 @@ TEST_P(CompressorTest, sharded_input_decompress)
+   int len = test.size();
+   bufferlist in, out;
+   in.append(test.c_str(), len);
+-  int res = compressor->compress(in, out);
++  boost::optional<int32_t> compressor_message;
++  int res = compressor->compress(in, out, compressor_message);
+   EXPECT_EQ(res, 0);
+   EXPECT_GT(out.length(), small_prefix_size);
+ 
+@@ -234,7 +245,7 @@ TEST_P(CompressorTest, sharded_input_decompress)
+   }
+ 
+   bufferlist after;
+-  res = compressor->decompress(out2, after);
++  res = compressor->decompress(out2, after, compressor_message);
+   EXPECT_EQ(res, 0);
+ }
+ 
+@@ -248,7 +259,8 @@ void test_compress(CompressorRef compressor, size_t size)
+   in.append(data, size);
+   for (size_t t = 0; t < 10000; t++) {
+     bufferlist out;
+-    int res = compressor->compress(in, out);
++    boost::optional<int32_t> compressor_message;
++    int res = compressor->compress(in, out, compressor_message);
+     EXPECT_EQ(res, 0);
+   }
+   free(data);
+@@ -262,11 +274,12 @@ void test_decompress(CompressorRef compressor, size_t size)
+   }
+   bufferlist in, out;
+   in.append(data, size);
+-  int res = compressor->compress(in, out);
++  boost::optional<int32_t> compressor_message;
++  int res = compressor->compress(in, out, compressor_message);
+   EXPECT_EQ(res, 0);
+   for (size_t t = 0; t < 10000; t++) {
+     bufferlist out_dec;
+-    int res = compressor->decompress(out, out_dec);
++    int res = compressor->decompress(out, out_dec, compressor_message);
+     EXPECT_EQ(res, 0);
+   }
+   free(data);
+@@ -338,7 +351,9 @@ INSTANTIATE_TEST_CASE_P(
+ #ifdef HAVE_BROTLI
+     "brotli",
+ #endif
+-    "zstd"));
++    "zstd",
++    "glz/level0",
++    "glz/level1"));
+ 
+ #ifdef __x86_64__
+ 
+@@ -363,10 +378,11 @@ TEST(ZlibCompressor, zlib_isal_compatibility)
+   bufferlist in, out;
+   in.append(test, len);
+   // isal -> zlib
+-  int res = isal->compress(in, out);
++  boost::optional<int32_t> compressor_message;
++  int res = isal->compress(in, out, compressor_message);
+   EXPECT_EQ(res, 0);
+   bufferlist after;
+-  res = zlib->decompress(out, after);
++  res = isal->decompress(out, after, compressor_message);
+   EXPECT_EQ(res, 0);
+   bufferlist exp;
+   exp.append(static_cast<char*>(test));
+@@ -431,10 +447,11 @@ TEST(ZlibCompressor, isal_compress_zlib_decompress_random)
+     bufferlist in, out;
+     in.append(test, size);
+ 
+-    int res = isal->compress(in, out);
++    boost::optional<int32_t> compressor_message;
++    int res = isal->compress(in, out, compressor_message);
+     EXPECT_EQ(res, 0);
+     bufferlist after;
+-    res = zlib->decompress(out, after);
++    res = zlib->decompress(out, after, compressor_message);
+     EXPECT_EQ(res, 0);
+     bufferlist exp;
+     exp.append(test, size);
+@@ -470,10 +487,11 @@ TEST(ZlibCompressor, isal_compress_zlib_decompress_walk)
+     bufferlist in, out;
+     in.append(test, size);
+ 
+-    int res = isal->compress(in, out);
++    boost::optional<int32_t> compressor_message;
++    int res = isal->compress(in, out, compressor_message);
+     EXPECT_EQ(res, 0);
+     bufferlist after;
+-    res = zlib->decompress(out, after);
++    res = zlib->decompress(out, after, compressor_message);
+     EXPECT_EQ(res, 0);
+     bufferlist exp;
+     exp.append(test, size);
+@@ -508,10 +526,11 @@ TEST(QAT, enc_qat_dec_noqat) {
+       bufferlist in, out;
+       in.append(test, size);
+   
+-      int res = q->compress(in, out);
++      boost::optional<int32_t> compressor_message;
++      int res = q->compress(in, out, compressor_message);
+       EXPECT_EQ(res, 0);
+       bufferlist after;
+-      res = noq->decompress(out, after);
++      res = noq->decompress(out, after, compressor_message);
+       EXPECT_EQ(res, 0);
+       bufferlist exp;
+       exp.append(test, size);
+@@ -544,10 +563,11 @@ TEST(QAT, enc_noqat_dec_qat) {
+       bufferlist in, out;
+       in.append(test, size);
+   
+-      int res = noq->compress(in, out);
++      boost::optional<int32_t> compressor_message;
++      int res = noq->compress(in, out, compressor_message);
+       EXPECT_EQ(res, 0);
+       bufferlist after;
+-      res = q->decompress(out, after);
++      es = q->decompress(out, after, compressor_message);
+       EXPECT_EQ(res, 0);
+       bufferlist exp;
+       exp.append(test, size);
+diff --git a/src/test/rgw/test_rgw_compression.cc b/src/test/rgw/test_rgw_compression.cc
+index 936b8f7c..b1e34032 100644
+--- a/src/test/rgw/test_rgw_compression.cc
++++ b/src/test/rgw/test_rgw_compression.cc
+@@ -129,6 +129,7 @@ TEST(Compress, LimitedChunkSize)
+     RGWCompressionInfo cs_info;
+     cs_info.compression_type = plugin->get_type_name();
+     cs_info.orig_size = s;
++    cs_info.compressor_message = compressor.get_compressor_message();
+     cs_info.blocks = move(compressor.get_compression_blocks());
+ 
+     ut_get_sink_size d_sink;
+@@ -167,6 +168,7 @@ TEST(Compress, BillionZeros)
+   RGWCompressionInfo cs_info;
+   cs_info.compression_type = plugin->get_type_name();
+   cs_info.orig_size = size*1000;
++  cs_info.compressor_message = compressor.get_compressor_message();
+   cs_info.blocks = move(compressor.get_compression_blocks());
+ 
+   ut_get_sink d_sink;
